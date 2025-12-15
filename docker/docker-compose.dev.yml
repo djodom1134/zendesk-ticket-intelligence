@@ -1,0 +1,42 @@
+version: "3.8"
+
+# Development overrides - use with: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  ingest:
+    build:
+      context: ../services/ingest
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ../services/ingest:/app
+      - ../shared:/app/shared
+    environment:
+      - DEBUG=1
+      - LOG_LEVEL=DEBUG
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  chat:
+    build:
+      context: ../services/chat
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ../services/chat:/app
+      - ../shared:/app/shared
+    environment:
+      - DEBUG=1
+      - LOG_LEVEL=DEBUG
+    ports:
+      - "5678:5678"  # debugpy
+    command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5678", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+
+  ui:
+    build:
+      context: ../services/ui
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ../services/ui:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+    command: ["npm", "run", "dev"]
+

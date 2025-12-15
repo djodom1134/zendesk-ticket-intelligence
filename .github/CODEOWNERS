@@ -1,0 +1,15 @@
+# Default owners for everything in the repo
+* @djodom1134
+
+# Service-specific owners
+/services/ingest/ @djodom1134
+/services/normalize/ @djodom1134
+/services/kg_extract/ @djodom1134
+/services/embed_cluster/ @djodom1134
+/services/chat/ @djodom1134
+/services/ui/ @djodom1134
+
+# Infrastructure
+/docker/ @djodom1134
+/scripts/ @djodom1134
+
