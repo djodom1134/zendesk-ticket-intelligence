@@ -2,30 +2,40 @@
 
 This document outlines how to set up seamless development between your local machine and the remote GPU machine.
 
+## Current Configuration
+
+- **GPU Machine IP**: 192.168.87.79 (Zendesk agent host)
+- **SSH Host Alias**: `zti-gpu`
+- **User**: d (same as local)
+
 ## SSH Configuration
 
-### 1. Generate SSH Key Pair (if not exists)
-```bash
-# On local machine
-ssh-keygen -t ed25519 -C "zti-development"
-```
+### 1. SSH Config (Already Configured)
 
-### 2. Copy Public Key to GPU Machine
-```bash
-# Replace with actual GPU machine details
-ssh-copy-id -i ~/.ssh/id_ed25519.pub user@gpu-machine-ip
-```
+The following has been added to `~/.ssh/config`:
 
-### 3. Configure SSH Config
-Add to `~/.ssh/config`:
 ```
+# ZTI GPU Machine for Zendesk Ticket Intelligence project
 Host zti-gpu
-    HostName [GPU_MACHINE_IP]
-    User [USERNAME]
-    IdentityFile ~/.ssh/id_ed25519
+    HostName 192.168.87.79
+    User d
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
     ForwardAgent yes
     ServerAliveInterval 60
     ServerAliveCountMax 3
+```
+
+### 2. Copy Public Key to GPU Machine (if needed)
+
+If SSH key auth isn't set up, run:
+```bash
+ssh-copy-id -i ~/.ssh/id_rsa.pub zti-gpu
+```
+
+### 3. Test Connection
+```bash
+ssh zti-gpu "hostname && nvidia-smi --query-gpu=name --format=csv"
 ```
 
 ## VS Code Remote Development
