@@ -60,17 +60,17 @@ fi
 
 # Pull required Docker images
 echo "🐳 Pulling Docker images..."
-docker-compose pull
+docker compose -f docker/docker-compose.yml pull
 
 # Download Ollama model
 echo "🤖 Setting up Ollama model..."
-docker-compose up -d ollama
+docker compose -f docker/docker-compose.yml up -d ollama
 sleep 10
-docker-compose exec ollama ollama pull llama2:7b
+docker compose -f docker/docker-compose.yml exec ollama ollama pull llama2:7b
 
 echo "✅ Bootstrap complete!"
 echo ""
 echo "Next steps:"
 echo "1. Configure .env file"
-echo "2. Run: docker-compose up -d"
+echo "2. Run: docker compose -f docker/docker-compose.yml up -d"
 echo "3. Run: ./scripts/healthcheck.sh"

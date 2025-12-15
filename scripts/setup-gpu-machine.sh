@@ -1,6 +1,12 @@
 #!/bin/bash
 # Setup script for GPU machine - run this once the machine is accessible
 # Usage: ./scripts/setup-gpu-machine.sh
+#
+# GPU Machine Details:
+#   Host: spark-b4eb (DGX Spark)
+#   IP: 192.168.87.134
+#   User: djodom
+#   GPU: NVIDIA GB10 (Grace Blackwell)
 
 set -e
 
@@ -10,7 +16,7 @@ REMOTE_DIR="~/zendesk-ticket-intelligence"
 
 echo "🔧 ZTI GPU Machine Setup Script"
 echo "================================"
-echo "Target: $GPU_HOST"
+echo "Target: $GPU_HOST (192.168.87.134)"
 echo ""
 
 # Test SSH connection

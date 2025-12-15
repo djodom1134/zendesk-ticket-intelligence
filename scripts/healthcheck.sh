@@ -11,7 +11,7 @@ check_service() {
     local attempt=1
 
     echo -n "Checking $service... "
-    
+
     while [ $attempt -le $max_attempts ]; do
         if curl -s -f "$url" > /dev/null 2>&1; then
             echo "✅ OK"
@@ -20,14 +20,14 @@ check_service() {
         sleep 2
         attempt=$((attempt + 1))
     done
-    
+
     echo "❌ FAILED"
     return 1
 }
 
 # Check if services are running
 echo "📋 Checking Docker services..."
-docker-compose ps
+docker compose -f docker/docker-compose.yml ps
 
 echo ""
 echo "🌐 Checking service endpoints..."
@@ -44,11 +44,11 @@ check_service "Ollama" "http://localhost:11434/api/tags"
 # Verify GPU usage for Ollama
 echo ""
 echo "🎮 Checking GPU acceleration..."
-if docker-compose exec ollama nvidia-smi > /dev/null 2>&1; then
+if docker compose -f docker/docker-compose.yml exec ollama nvidia-smi > /dev/null 2>&1; then
     echo "✅ GPU accessible in Ollama container"
-    
+
     # Check if Ollama is actually using GPU
-    if docker-compose exec ollama ollama ps | grep -q "GPU"; then
+    if docker compose -f docker/docker-compose.yml exec ollama ollama ps | grep -q "GPU"; then
         echo "✅ Ollama using GPU acceleration"
     else
         echo "⚠️  Ollama may be running on CPU - check OLLAMA_LLM_LIBRARY setting"

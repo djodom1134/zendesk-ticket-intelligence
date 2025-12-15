@@ -4,9 +4,14 @@ This document outlines how to set up seamless development between your local mac
 
 ## Current Configuration
 
-- **GPU Machine IP**: 192.168.87.79 (Zendesk agent host)
+- **GPU Machine**: DGX Spark (spark-b4eb)
+- **GPU Machine IP**: 192.168.87.134
 - **SSH Host Alias**: `zti-gpu`
-- **User**: d (same as local)
+- **User**: djodom
+- **GPU**: NVIDIA GB10 (Grace Blackwell)
+- **CUDA**: 13.0
+- **RAM**: 119GB
+- **Storage**: 3.7TB
 
 ## SSH Configuration
 
@@ -17,8 +22,8 @@ The following has been added to `~/.ssh/config`:
 ```
 # ZTI GPU Machine for Zendesk Ticket Intelligence project
 Host zti-gpu
-    HostName 192.168.87.79
-    User d
+    HostName 192.168.87.134
+    User djodom
     IdentityFile ~/.ssh/id_rsa
     StrictHostKeyChecking no
     ForwardAgent yes
@@ -26,16 +31,22 @@ Host zti-gpu
     ServerAliveCountMax 3
 ```
 
-### 2. Copy Public Key to GPU Machine (if needed)
+### 2. SSH Key Authentication ✅
 
-If SSH key auth isn't set up, run:
-```bash
-ssh-copy-id -i ~/.ssh/id_rsa.pub zti-gpu
-```
+SSH key has been copied to the GPU machine. Passwordless access is configured.
 
 ### 3. Test Connection
 ```bash
 ssh zti-gpu "hostname && nvidia-smi --query-gpu=name --format=csv"
+```
+
+### 4. Quick Access
+```bash
+# SSH into GPU machine
+ssh zti-gpu
+
+# Project directory on GPU machine
+cd ~/zendesk-ticket-intelligence
 ```
 
 ## VS Code Remote Development
