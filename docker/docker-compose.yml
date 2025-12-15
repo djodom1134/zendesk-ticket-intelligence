@@ -138,11 +138,42 @@ services:
     networks:
       - zti-network
 
+  # ================== Application Services ==================
+
+  # Ingest Service - Fetches tickets from Zendesk A2A agent
+  ingest:
+    build:
+      context: ../services/ingest
+      dockerfile: Dockerfile
+    container_name: zti-ingest
+    ports:
+      - "8000:8000"
+    environment:
+      - ZENDESK_AGENT_URL=${ZENDESK_AGENT_URL:-http://192.168.87.79:10004}
+      - ARANGODB_HOST=arangodb
+      - ARANGODB_PORT=8529
+      - ZTI_DATA_DIR=/data/zti
+    volumes:
+      - ingest_data:/data/zti
+    depends_on:
+      arangodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - zti-network
+
 volumes:
   arangodb_data:
   arangodb_apps_data:
   qdrant_data:
   ollama_data:
+  ingest_data:
 
 networks:
   zti-network:
