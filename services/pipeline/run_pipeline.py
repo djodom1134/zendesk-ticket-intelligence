@@ -16,7 +16,7 @@ log = structlog.get_logger()
 sys.path.insert(0, "/app")
 
 from services.normalize.normalizer import TicketNormalizer
-from services.normalize.pii_redactor import PIIRedactor
+from services.normalize.redactor import PIIRedactor
 from services.embed.embedder import TicketEmbedder
 from services.cluster.clusterer import TicketClusterer
 from services.cluster_label.labeler import ClusterLabeler
