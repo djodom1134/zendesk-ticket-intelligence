@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ZTI Pipeline Runner - Runs full pipeline: normalize → embed → cluster → label
+ZTI Pipeline Runner - Runs full pipeline: normalize → summarize → embed → cluster → label
 All steps run inside the pipeline container on the GPU machine.
 """
 
@@ -20,19 +20,23 @@ from services.normalize.redactor import PIIRedactor
 from services.embed_cluster.embedder import TicketEmbedder
 from services.embed_cluster.clusterer import TicketClusterer
 from services.embed_cluster.labeler import ClusterLabeler
+from services.embed_cluster.summarizer import TicketSummarizer
 
 
 @click.command()
 @click.option("--input", "-i", "input_file", required=True, help="Input JSON file with raw tickets")
 @click.option("--output-dir", "-o", default="/data/zti", help="Output directory for results")
 @click.option("--skip-normalize", is_flag=True, help="Skip normalization step")
+@click.option("--skip-summarize", is_flag=True, help="Skip summarization step (embed full text)")
 @click.option("--skip-embed", is_flag=True, help="Skip embedding step")
 @click.option("--skip-cluster", is_flag=True, help="Skip clustering step")
 @click.option("--skip-label", is_flag=True, help="Skip labeling step")
 @click.option("--enable-redaction", is_flag=True, help="Enable PII redaction (disabled by default)")
 @click.option("--ollama-url", default=None, help="Ollama URL (default: from OLLAMA_URL env or http://ollama:11434)")
-def main(input_file: str, output_dir: str, skip_normalize: bool, skip_embed: bool,
-         skip_cluster: bool, skip_label: bool, enable_redaction: bool, ollama_url: str):
+@click.option("--summarize-model", default="gpt-oss:120b", help="LLM model for summarization")
+def main(input_file: str, output_dir: str, skip_normalize: bool, skip_summarize: bool,
+         skip_embed: bool, skip_cluster: bool, skip_label: bool, enable_redaction: bool,
+         ollama_url: str, summarize_model: str):
     """Run the ZTI pipeline on ticket data."""
 
     os.makedirs(output_dir, exist_ok=True)
@@ -69,14 +73,37 @@ def main(input_file: str, output_dir: str, skip_normalize: bool, skip_embed: boo
     else:
         log.info("Skipping normalization")
 
-    # Step 2: Embed
+    # Step 2: Summarize (for long tickets)
+    summaries = None
+    if not skip_summarize:
+        log.info("Step 2: Summarizing tickets...", model=summarize_model)
+        summarizer = TicketSummarizer(ollama_url=ollama_url_resolved, model=summarize_model)
+        summaries = summarizer.summarize_batch(tickets)
+
+        # Save summaries
+        summary_file = os.path.join(output_dir, "summaries.json")
+        with open(summary_file, "w") as f:
+            summary_data = [{"ticket_id": t.get("ticket_id") or t.get("id"), "summary": s}
+                           for t, s in zip(tickets, summaries)]
+            json.dump(summary_data, f, indent=2)
+        log.info("Summarization complete", output=summary_file, count=len(summaries))
+    else:
+        log.info("Skipping summarization - will embed full text")
+
+    # Step 3: Embed
     embeddings = None
     if not skip_embed:
-        log.info("Step 2: Generating embeddings...", ollama_url=ollama_url_resolved)
+        log.info("Step 3: Generating embeddings...", ollama_url=ollama_url_resolved)
         embedder = TicketEmbedder(ollama_url=ollama_url_resolved)
 
-        texts = [t.get("ticket_fulltext", "") or f"{t.get('subject', '')} {t.get('description', '')}"
-                 for t in tickets]
+        # Use summaries if available, otherwise use full text
+        if summaries:
+            texts = summaries
+            log.info("Embedding summaries")
+        else:
+            texts = [t.get("ticket_fulltext", "") or f"{t.get('subject', '')} {t.get('description', '')}"
+                     for t in tickets]
+            log.info("Embedding full text")
         embeddings = embedder.embed_batch(texts)
 
         embed_file = os.path.join(output_dir, "embeddings.json")
@@ -88,10 +115,10 @@ def main(input_file: str, output_dir: str, skip_normalize: bool, skip_embed: boo
     else:
         log.info("Skipping embedding")
 
-    # Step 3: Cluster
+    # Step 4: Cluster
     clusters = None
     if not skip_cluster and embeddings is not None:
-        log.info("Step 3: Clustering tickets...")
+        log.info("Step 4: Clustering tickets...")
         clusterer = TicketClusterer()
 
         cluster_result = clusterer.cluster(embeddings, tickets)
@@ -104,9 +131,9 @@ def main(input_file: str, output_dir: str, skip_normalize: bool, skip_embed: boo
     else:
         log.info("Skipping clustering")
 
-    # Step 4: Label
+    # Step 5: Label
     if not skip_label and clusters is not None:
-        log.info("Step 4: Labeling clusters...")
+        log.info("Step 5: Labeling clusters...")
         labeler = ClusterLabeler()
 
         labeled = labeler.label_clusters(clusters, tickets)
