@@ -153,6 +153,10 @@ OUTPUT (ALL IN ENGLISH):
 - Customer Response: [customer's reply or "no response"]
 - Status: [resolved/pending/closed without response]
 
+**IMAGE ATTACHMENTS** (if any):
+[For each image, list: "filename.jpg: description from vision analysis"]
+[If no images: "None"]
+
 **KEYWORDS**: [5-7 English terms for clustering]"""
 
 

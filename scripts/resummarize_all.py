@@ -166,9 +166,12 @@ async def process_ticket_images(
 
 class ParallelPipeline:
     """
-    Parallel pipeline that fetches tickets from MCP while GPU summarizes.
-    Uses a queue to decouple fetching from summarization.
-    Processes image attachments with vision model.
+    Parallel pipeline with 3 stages running concurrently:
+    1. Fetch tickets from MCP
+    2. Process images with vision model (ministral-3)
+    3. Summarize with text model (gpt-oss)
+
+    This allows image processing for ticket N+1 while ticket N is being summarized.
     """
 
     def __init__(
@@ -186,24 +189,72 @@ class ParallelPipeline:
         self.vision_model = vision_model
         self.prefetch_count = prefetch_count
         self.process_images = process_images
-        self.ticket_queue = asyncio.Queue(maxsize=prefetch_count)
+
+        # Two-stage queue: fetch -> image processing -> summarization
+        self.fetch_queue = asyncio.Queue(maxsize=prefetch_count)
+        self.summary_queue = asyncio.Queue(maxsize=prefetch_count)
+
         self.results = {}
         self.fetch_errors = 0
         self.summarize_errors = 0
         self.images_processed = 0
+        self._stop_signal = object()  # Sentinel for stopping workers
 
     async def fetch_worker(self, ticket_ids: list[int]):
-        """Worker that fetches tickets and puts them in the queue."""
+        """Stage 1: Fetch tickets from MCP and put in fetch_queue."""
         for ticket_id in ticket_ids:
             ticket = await fetch_ticket_full_context(self.mcp_client, ticket_id)
             if ticket:
-                await self.ticket_queue.put((ticket_id, ticket))
+                await self.fetch_queue.put((ticket_id, ticket))
             else:
                 self.fetch_errors += 1
-                await self.ticket_queue.put((ticket_id, None))  # Signal failed fetch
+                await self.fetch_queue.put((ticket_id, None))
 
         # Signal end of fetching
-        await self.ticket_queue.put((None, None))
+        await self.fetch_queue.put((None, self._stop_signal))
+
+    async def image_worker(self, show_live: bool = True):
+        """
+        Stage 2: Process images with vision model.
+        Runs in parallel with summarization - while gpt-oss summarizes one ticket,
+        ministral-3 processes images for the next ticket.
+        """
+        while True:
+            ticket_id, ticket = await self.fetch_queue.get()
+
+            # Check for stop signal
+            if ticket is self._stop_signal:
+                await self.summary_queue.put((None, self._stop_signal, []))
+                break
+
+            if ticket is None:
+                # Fetch failed, pass through
+                await self.summary_queue.put((ticket_id, None, []))
+                continue
+
+            # Process images if enabled
+            image_descriptions = []
+            image_attachments = ticket.get("image_attachments", [])
+
+            if self.process_images and image_attachments:
+                num_images = len(image_attachments)
+                if show_live:
+                    print(f"    🖼️  Processing {num_images} images for ticket {ticket_id}...")
+
+                image_descriptions = await process_ticket_images(
+                    ticket=ticket,
+                    ollama_url=self.ollama_url,
+                    vision_model=self.vision_model,
+                    max_images=5,
+                )
+                self.images_processed += len(image_descriptions)
+
+                # Add to ticket for summarizer
+                if image_descriptions:
+                    ticket["_image_descriptions"] = image_descriptions
+
+            # Pass to summary queue
+            await self.summary_queue.put((ticket_id, ticket, image_descriptions))
 
     async def process_tickets(
         self,
@@ -213,8 +264,12 @@ class ParallelPipeline:
         show_live: bool = True,
     ) -> tuple[int, int]:
         """
-        Process tickets with parallel fetch + summarize.
-        Also processes image attachments with vision model.
+        Process tickets with 3-stage parallel pipeline:
+        - Stage 1: Fetch tickets from MCP
+        - Stage 2: Process images with vision model (ministral-3)
+        - Stage 3: Summarize with text model (gpt-oss)
+
+        This allows image processing for ticket N+1 while ticket N is being summarized.
 
         Returns:
             Tuple of (processed_count, failed_count)
@@ -224,19 +279,26 @@ class ParallelPipeline:
         failed = 0
         start_time = time.time()
 
-        # Start fetch worker
+        print(f"\n🚀 Starting 3-STAGE PARALLEL pipeline (prefetch={self.prefetch_count})")
+        print(f"   Stage 1: Fetch tickets from MCP")
+        print(f"   Stage 2: Process images with {self.vision_model}")
+        print(f"   Stage 3: Summarize with {self.summarizer.model}")
+        print(f"   Images enabled: {self.process_images}")
+        print(f"\n   ⚡ Vision + Summary run in PARALLEL on different models!")
+
+        # Start Stage 1: Fetch worker
         fetch_task = asyncio.create_task(self.fetch_worker(ticket_ids))
 
-        print(f"\n🚀 Starting parallel pipeline (prefetch={self.prefetch_count})")
-        print(f"   Fetching from MCP while GPU summarizes...")
-        print(f"   Vision model: {self.vision_model} (images={self.process_images})")
+        # Start Stage 2: Image processing worker
+        image_task = asyncio.create_task(self.image_worker(show_live=show_live))
 
+        # Stage 3: Summarization (main loop)
         while True:
-            # Get next ticket from queue
-            ticket_id, ticket = await self.ticket_queue.get()
+            # Get next ticket from summary queue (already has images processed)
+            ticket_id, ticket, image_descriptions = await self.summary_queue.get()
 
             # Check for end signal
-            if ticket_id is None:
+            if ticket is self._stop_signal:
                 break
 
             idx = processed + failed + 1
@@ -247,31 +309,14 @@ class ParallelPipeline:
                 print(f"\n[{idx}/{total}] ❌ Failed to fetch ticket {ticket_id}")
                 continue
 
-            # Check for image attachments
-            image_attachments = ticket.get("image_attachments", [])
-            num_images = len(image_attachments)
-
+            # Show ticket info
+            num_images = len(image_descriptions)
             if show_live:
-                img_info = f" | 📷 {num_images} images" if num_images > 0 else ""
-                print(f"\n[{idx}/{total}] 📋 Ticket {ticket_id}{img_info}")
+                img_info = f" | 📷 {num_images} images analyzed" if num_images > 0 else ""
+                print(f"\n[{idx}/{total}] 📋 Summarizing ticket {ticket_id}{img_info}")
 
             try:
-                # Process images if enabled and present
-                image_descriptions = []
-                if self.process_images and num_images > 0:
-                    image_descriptions = await process_ticket_images(
-                        ticket=ticket,
-                        ollama_url=self.ollama_url,
-                        vision_model=self.vision_model,
-                        max_images=5,
-                    )
-                    self.images_processed += len(image_descriptions)
-
-                    # Add image descriptions to ticket for summarizer
-                    if image_descriptions:
-                        ticket["_image_descriptions"] = image_descriptions
-
-                # Summarize (this is the slow GPU operation)
+                # Summarize (gpt-oss:120b)
                 summary, metrics = self.summarizer.summarize_full_ticket(
                     ticket=ticket,
                     is_last=(idx == total),
@@ -304,10 +349,12 @@ class ParallelPipeline:
                       f"Rate: {rate:.0f}/hr | "
                       f"ETA: {eta/60:.1f}min | "
                       f"Images: {self.images_processed} | "
-                      f"Queue: {self.ticket_queue.qsize()}")
+                      f"Fetch Q: {self.fetch_queue.qsize()} | "
+                      f"Summary Q: {self.summary_queue.qsize()}")
 
-        # Wait for fetch worker to complete
+        # Wait for workers to complete
         await fetch_task
+        await image_task
 
         return processed, failed
 
