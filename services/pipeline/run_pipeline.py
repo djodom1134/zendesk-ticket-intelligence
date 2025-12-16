@@ -81,7 +81,9 @@ def main(input_file: str, output_dir: str, skip_normalize: bool, skip_embed: boo
 
         embed_file = os.path.join(output_dir, "embeddings.json")
         with open(embed_file, "w") as f:
-            json.dump({"embeddings": [e.tolist() for e in embeddings], "ticket_ids": [t.get("id") for t in tickets]}, f)
+            # Handle both numpy arrays and plain lists
+            emb_list = [e.tolist() if hasattr(e, 'tolist') else e for e in embeddings]
+            json.dump({"embeddings": emb_list, "ticket_ids": [t.get("ticket_id") or t.get("id") for t in tickets]}, f)
         log.info("Embedding complete", output=embed_file, vectors=len(embeddings))
     else:
         log.info("Skipping embedding")
