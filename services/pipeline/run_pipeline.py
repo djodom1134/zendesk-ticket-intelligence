@@ -17,9 +17,9 @@ sys.path.insert(0, "/app")
 
 from services.normalize.normalizer import TicketNormalizer
 from services.normalize.redactor import PIIRedactor
-from services.embed.embedder import TicketEmbedder
-from services.cluster.clusterer import TicketClusterer
-from services.cluster_label.labeler import ClusterLabeler
+from services.embed_cluster.embedder import TicketEmbedder
+from services.embed_cluster.clusterer import TicketClusterer
+from services.embed_cluster.labeler import ClusterLabeler
 
 
 @click.command()
