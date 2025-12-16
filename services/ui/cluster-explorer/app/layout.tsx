@@ -4,7 +4,7 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import Link from "next/link";
-import { LayoutGrid, MessageSquare, Search } from "lucide-react";
+import { LayoutGrid, MessageSquare, Search, BarChart3 } from "lucide-react";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -38,6 +38,13 @@ export default function RootLayout({
                 </div>
               </div>
               <nav className="flex items-center gap-4">
+                <Link
+                  href="/overview"
+                  className="flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 transition-colors hover:bg-muted"
+                >
+                  <BarChart3 className="h-4 w-4" />
+                  <span>Overview</span>
+                </Link>
                 <Link
                   href="/"
                   className="flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 transition-colors hover:bg-muted"

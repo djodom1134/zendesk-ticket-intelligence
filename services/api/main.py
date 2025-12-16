@@ -662,4 +662,85 @@ async def assign_cluster(request: AssignClusterRequest):
 
     except Exception as e:
         logger.error("Cluster assignment failed", error=str(e))
+
+
+# ============================================================================
+# Incremental Processing & Webhooks
+# ============================================================================
+
+class WebhookPayload(BaseModel):
+    """Zendesk webhook payload for ticket events."""
+    ticket_id: str
+    event_type: str  # "ticket.created", "ticket.updated"
+    ticket: Optional[dict] = None
+
+
+class IncrementalResult(BaseModel):
+    processed: int
+    skipped: int
+    elapsed_seconds: float
+
+
+@app.post("/api/webhook/zendesk", response_model=IncrementalResult)
+async def zendesk_webhook(payload: WebhookPayload):
+    """
+    Receive Zendesk webhook for real-time ticket processing.
+    Processes new/updated tickets immediately.
+    """
+    try:
+        from services.pipeline.incremental import IncrementalPipeline
+
+        pipeline = IncrementalPipeline(
+            arango_host=ARANGODB_HOST,
+            arango_port=ARANGODB_PORT,
+            arango_db=ARANGODB_DB,
+            qdrant_host=QDRANT_HOST,
+            qdrant_port=QDRANT_PORT,
+            ollama_url=OLLAMA_URL,
+            embed_model=EMBED_MODEL,
+        )
+
+        if payload.ticket:
+            result = pipeline.run(tickets=[payload.ticket])
+        else:
+            # Fetch ticket by ID if not included in payload
+            # This would require Zendesk API access
+            logger.warning("Webhook received without ticket data", ticket_id=payload.ticket_id)
+            result = {"processed": 0, "skipped": 0, "elapsed_seconds": 0}
+
+        return IncrementalResult(**result)
+
+    except Exception as e:
+        logger.error("Webhook processing failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class BatchProcessRequest(BaseModel):
+    tickets: list[dict]
+
+
+@app.post("/api/process/batch", response_model=IncrementalResult)
+async def process_batch(request: BatchProcessRequest):
+    """
+    Process a batch of tickets through the incremental pipeline.
+    Used for manual imports or bulk processing.
+    """
+    try:
+        from services.pipeline.incremental import IncrementalPipeline
+
+        pipeline = IncrementalPipeline(
+            arango_host=ARANGODB_HOST,
+            arango_port=ARANGODB_PORT,
+            arango_db=ARANGODB_DB,
+            qdrant_host=QDRANT_HOST,
+            qdrant_port=QDRANT_PORT,
+            ollama_url=OLLAMA_URL,
+            embed_model=EMBED_MODEL,
+        )
+
+        result = pipeline.run(tickets=request.tickets)
+        return IncrementalResult(**result)
+
+    except Exception as e:
+        logger.error("Batch processing failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
