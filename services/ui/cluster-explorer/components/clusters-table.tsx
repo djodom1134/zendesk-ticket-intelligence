@@ -1,25 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { 
-  AlertCircle, 
-  TrendingUp, 
-  Eye, 
+import {
+  AlertCircle,
+  TrendingUp,
+  Eye,
   Tag,
-  Sparkles 
+  Sparkles
 } from "lucide-react";
-
-interface Cluster {
-  id: string;
-  label: string;
-  size: number;
-  trend: number[];
-  priority: string;
-  keywords: string[];
-  issueDescription: string;
-  confidence: number;
-  createdAt: string;
-}
+import { Cluster } from "../lib/types";
 
 interface ClustersTableProps {
   clusters: Cluster[];
@@ -59,7 +48,7 @@ export function ClustersTable({ clusters, onSelectCluster }: ClustersTableProps)
       const y = height - ((v - min) / range) * height;
       return `${x},${y}`;
     }).join(" ");
-    
+
     return (
       <svg width={width} height={height} className="inline-block">
         <polyline
@@ -83,7 +72,7 @@ export function ClustersTable({ clusters, onSelectCluster }: ClustersTableProps)
           <span className="text-sm text-muted-foreground">Click a row to view details</span>
         </div>
         <div className="flex items-center gap-2">
-          <select 
+          <select
             className="text-sm bg-background border border-border rounded-lg px-3 py-1.5"
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
@@ -111,7 +100,7 @@ export function ClustersTable({ clusters, onSelectCluster }: ClustersTableProps)
           </thead>
           <tbody>
             {sortedClusters.map((cluster) => (
-              <tr 
+              <tr
                 key={cluster.id}
                 className="transition-all duration-200 hover:bg-[#76b900]/5 cursor-pointer group border-b border-border/10 last:border-b-0 hover:border-l-4 hover:border-l-[#76b900]"
                 onClick={() => onSelectCluster(cluster)}

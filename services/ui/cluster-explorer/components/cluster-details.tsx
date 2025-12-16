@@ -2,22 +2,7 @@
 
 import { ArrowLeft, Tag, FileText, MessageSquare, ExternalLink, Copy, Check } from "lucide-react";
 import { useState } from "react";
-
-interface Cluster {
-  id: string;
-  label: string;
-  size: number;
-  trend: number[];
-  priority: string;
-  keywords: string[];
-  issueDescription: string;
-  environment: string;
-  recommendedResponse: string;
-  deflectionPath: string;
-  confidence: number;
-  representativeTickets: string[];
-  createdAt: string;
-}
+import { Cluster } from "../lib/types";
 
 interface ClusterDetailsProps {
   cluster: Cluster;
@@ -28,9 +13,11 @@ export function ClusterDetails({ cluster, onBack }: ClusterDetailsProps) {
   const [copied, setCopied] = useState(false);
 
   const copyResponse = () => {
-    navigator.clipboard.writeText(cluster.recommendedResponse);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (cluster.recommendedResponse) {
+      navigator.clipboard.writeText(cluster.recommendedResponse);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   const getPriorityColor = (priority: string) => {
@@ -140,19 +127,21 @@ export function ClusterDetails({ cluster, onBack }: ClusterDetailsProps) {
         </div>
 
         {/* Representative Tickets */}
-        <div className="nvidia-build-card">
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
-            <FileText className="h-4 w-4" />
-            Representative Tickets
-          </h3>
-          <div className="space-y-2">
-            {cluster.representativeTickets.map((ticket) => (
-              <div key={ticket} className="flex items-center gap-2 text-sm">
-                <span className="font-mono bg-muted px-2 py-1 rounded">{ticket}</span>
-              </div>
-            ))}
+        {cluster.representativeTickets && cluster.representativeTickets.length > 0 && (
+          <div className="nvidia-build-card">
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
+              <FileText className="h-4 w-4" />
+              Representative Tickets
+            </h3>
+            <div className="space-y-2">
+              {cluster.representativeTickets.map((ticket) => (
+                <div key={ticket} className="flex items-center gap-2 text-sm">
+                  <span className="font-mono bg-muted px-2 py-1 rounded">{ticket}</span>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

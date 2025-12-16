@@ -5,6 +5,7 @@ import { ClustersTable } from "@/components/clusters-table";
 import { ClusterDetails } from "@/components/cluster-details";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LayoutGrid, TrendingUp, FileText } from "lucide-react";
+import { Cluster } from "@/lib/types";
 
 // Mock data - will be replaced with API calls
 const mockClusters = [
@@ -56,7 +57,7 @@ const mockClusters = [
 ];
 
 export default function Home() {
-  const [selectedCluster, setSelectedCluster] = useState<typeof mockClusters[0] | null>(null);
+  const [selectedCluster, setSelectedCluster] = useState<Cluster | null>(null);
   const [activeTab, setActiveTab] = useState("clusters");
 
   return (
