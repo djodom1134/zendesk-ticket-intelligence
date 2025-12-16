@@ -1,11 +1,13 @@
 """
-Zendesk A2A Protocol Client
-Communicates with the Zendesk agent using Google's A2A protocol
+Zendesk MCP Client
+Communicates with the Zendesk MCP server using SSE transport
 """
 
+import asyncio
 import json
-import uuid
-from typing import Any
+from collections import deque
+from datetime import datetime, timedelta
+from typing import Any, Optional
 
 import httpx
 import structlog
@@ -13,153 +15,237 @@ import structlog
 logger = structlog.get_logger()
 
 
-class ZendeskA2AClient:
-    """Client for Zendesk A2A agent"""
+class ZendeskMCPClient:
+    """
+    Client for Zendesk MCP server using SSE transport
 
-    def __init__(self, agent_url: str, timeout: float = 300.0):
-        self.agent_url = agent_url.rstrip("/")
+    MCP SSE Protocol:
+    1. GET /sse to establish SSE connection and receive session_id
+    2. POST /messages/?session_id=xxx with JSON-RPC requests
+    3. Responses arrive via SSE stream
+    """
+
+    def __init__(self, mcp_url: str, timeout: float = 300.0):
+        self.mcp_url = mcp_url.rstrip("/").replace("/sse", "")
         self.timeout = timeout
-        self._client = httpx.AsyncClient(timeout=timeout)
+        self._client: Optional[httpx.AsyncClient] = None
+        self._session_id: Optional[str] = None
+        self._responses: deque = deque()
+        self._sse_task: Optional[asyncio.Task] = None
+        self._request_id = 0
+        # MCP requires Host: localhost for local servers
+        self._headers = {"Host": "localhost:10005"}
 
-    async def check_health(self) -> bool:
-        """Check if agent is reachable"""
+    async def connect(self) -> bool:
+        """Establish SSE connection and get session ID"""
         try:
-            response = await self._client.get(
-                f"{self.agent_url}/.well-known/agent-card.json"
-            )
-            return response.status_code == 200
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+            self._sse_task = asyncio.create_task(self._sse_reader())
+
+            # Wait for session ID
+            for _ in range(50):  # 5 seconds max
+                if self._session_id:
+                    break
+                await asyncio.sleep(0.1)
+
+            if not self._session_id:
+                logger.error("Failed to get MCP session ID")
+                return False
+
+            # Initialize MCP
+            await self._initialize()
+            logger.info("Connected to MCP server", session=self._session_id[:8])
+            return True
+
         except Exception as e:
-            logger.warning("Agent health check failed", error=str(e))
+            logger.error("Failed to connect to MCP server", error=str(e))
             return False
 
-    async def get_agent_card(self) -> dict:
-        """Get agent capabilities"""
-        response = await self._client.get(
-            f"{self.agent_url}/.well-known/agent-card.json"
-        )
-        response.raise_for_status()
-        return response.json()
+    async def _sse_reader(self):
+        """Background task to read SSE events"""
+        try:
+            async with self._client.stream(
+                "GET", f"{self.mcp_url}/sse", headers=self._headers
+            ) as response:
+                async for line in response.aiter_lines():
+                    line = line.strip()
+                    if line.startswith("data: "):
+                        data = line[6:]
+                        if "session_id=" in data:
+                            self._session_id = data.split("session_id=")[1]
+                        else:
+                            try:
+                                msg = json.loads(data)
+                                self._responses.append(msg)
+                            except json.JSONDecodeError:
+                                pass
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning("SSE reader error", error=str(e))
 
-    async def send_message(self, text: str) -> dict:
-        """
-        Send a message to the agent using A2A protocol
-
-        Protocol: JSON-RPC 2.0
-        Method: message/send
-        """
-        message_id = str(uuid.uuid4())
-
-        payload = {
-            "jsonrpc": "2.0",
-            "id": message_id,
-            "method": "message/send",
-            "params": {
-                "message": {
-                    "messageId": message_id,
-                    "role": "user",
-                    "parts": [{"text": text}],
-                }
+    async def _initialize(self):
+        """Initialize MCP session"""
+        self._request_id += 1
+        await self._send_request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "zti-ingest", "version": "1.0.0"},
             },
-        }
-
-        logger.debug("Sending A2A message", message_id=message_id, text=text[:100])
-
-        response = await self._client.post(
-            self.agent_url,
-            json=payload,
-            headers={"Content-Type": "application/json"},
         )
-        response.raise_for_status()
+        await asyncio.sleep(0.5)
 
-        result = response.json()
+    async def _send_request(self, method: str, params: dict = None) -> int:
+        """Send JSON-RPC request via POST"""
+        self._request_id += 1
+        request = {
+            "jsonrpc": "2.0",
+            "id": self._request_id,
+            "method": method,
+        }
+        if params:
+            request["params"] = params
 
-        if "error" in result:
-            raise Exception(f"A2A error: {result['error']}")
+        await self._client.post(
+            f"{self.mcp_url}/messages/?session_id={self._session_id}",
+            json=request,
+            headers=self._headers,
+        )
+        return self._request_id
 
-        return result.get("result", {})
+    async def _wait_for_response(self, request_id: int, timeout: float = 60.0) -> dict:
+        """Wait for response with matching request ID"""
+        start = asyncio.get_event_loop().time()
+        while asyncio.get_event_loop().time() - start < timeout:
+            for i, resp in enumerate(self._responses):
+                if resp.get("id") == request_id:
+                    self._responses.remove(resp)
+                    if "error" in resp:
+                        raise Exception(f"MCP error: {resp['error']}")
+                    return resp.get("result", {})
+            await asyncio.sleep(0.1)
+        raise TimeoutError(f"Timeout waiting for response {request_id}")
 
-    async def fetch_tickets(self, days: int = 365) -> list[dict]:
+    async def call_tool(self, name: str, arguments: dict = None) -> Any:
+        """Call an MCP tool and wait for result"""
+        request_id = await self._send_request(
+            "tools/call",
+            {"name": name, "arguments": arguments or {}},
+        )
+        return await self._wait_for_response(request_id, timeout=self.timeout)
+
+    async def check_health(self) -> bool:
+        """Check if MCP server is reachable"""
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    f"{self.mcp_url}/sse",
+                    headers=self._headers,
+                )
+                return response.status_code == 200
+        except Exception as e:
+            logger.warning("MCP health check failed", error=str(e))
+            return False
+
+    async def fetch_tickets(self, days: int = 365, include_comments: bool = True) -> list[dict]:
         """
-        Fetch tickets from Zendesk agent
+        Fetch tickets using MCP crawl_tickets tool
 
         Args:
             days: Number of days of history to fetch
+            include_comments: Whether to include ticket comments
 
         Returns:
             List of raw ticket dictionaries
         """
-        logger.info("Fetching tickets from agent", days=days)
+        logger.info("Fetching tickets via MCP", days=days)
 
-        # Request ticket export from agent
-        prompt = f"Export all tickets from the last {days} days as JSON. Include ticket ID, subject, description, status, priority, created_at, updated_at, comments, tags, and custom fields."
+        # Use crawl_tickets tool for comprehensive data
+        result = await self.call_tool(
+            "crawl_tickets",
+            {
+                "days_back": days,
+                "status": ["new", "open", "pending", "hold", "solved", "closed"],
+                "include_description": True,
+                "include_comments": include_comments,
+            },
+        )
 
-        result = await self.send_message(prompt)
-
-        # Parse the response
-        tickets = self._parse_ticket_response(result)
-
+        # Extract tickets from result
+        tickets = self._parse_crawl_result(result)
         logger.info("Fetched tickets", count=len(tickets))
         return tickets
 
-    def _parse_ticket_response(self, result: dict) -> list[dict]:
-        """Parse ticket data from agent response"""
-        tickets = []
+    async def fetch_tickets_bulk(
+        self,
+        start_date: str,
+        end_date: str,
+        include_description: bool = True,
+    ) -> list[dict]:
+        """
+        Fetch tickets using bulk_export_tickets tool (for large ranges)
 
-        # Extract text parts from response
-        parts = result.get("parts", [])
-        for part in parts:
-            if part.get("kind") == "text":
-                text = part.get("text", "")
-                # Try to parse as JSON
-                tickets.extend(self._extract_tickets_from_text(text))
-            elif part.get("kind") == "data":
-                # Direct data response
-                data = part.get("data", {})
-                if isinstance(data, list):
-                    tickets.extend(data)
-                elif isinstance(data, dict) and "tickets" in data:
-                    tickets.extend(data["tickets"])
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+            include_description: Include ticket description
 
+        Returns:
+            List of ticket dictionaries
+        """
+        logger.info("Bulk exporting tickets", start=start_date, end=end_date)
+
+        result = await self.call_tool(
+            "bulk_export_tickets",
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+                "include_description": include_description,
+                "chunk_days": 7,  # Auto-chunk by week
+                "max_tickets": 100000,
+            },
+        )
+
+        tickets = self._parse_bulk_result(result)
+        logger.info("Bulk exported tickets", count=len(tickets))
         return tickets
 
-    def _extract_tickets_from_text(self, text: str) -> list[dict]:
-        """Extract ticket JSON from text response"""
-        tickets = []
+    def _parse_crawl_result(self, result: Any) -> list[dict]:
+        """Parse result from crawl_tickets tool"""
+        if isinstance(result, list):
+            # Check if it's a list of content items (MCP tool response format)
+            for item in result:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    try:
+                        parsed = json.loads(item.get("text", "[]"))
+                        # Handle nested {"tickets": [...]} structure
+                        if isinstance(parsed, dict) and "tickets" in parsed:
+                            return parsed["tickets"]
+                        return parsed
+                    except json.JSONDecodeError:
+                        pass
+            return result
+        elif isinstance(result, dict):
+            if "tickets" in result:
+                return result["tickets"]
+            if "content" in result:
+                return self._parse_crawl_result(result["content"])
+        return []
 
-        # Try to find JSON in the response
-        try:
-            # First try: entire response is JSON
-            data = json.loads(text)
-            if isinstance(data, list):
-                return data
-            elif isinstance(data, dict) and "tickets" in data:
-                return data["tickets"]
-        except json.JSONDecodeError:
-            pass
-
-        # Second try: find JSON array in text
-        try:
-            start = text.find("[")
-            end = text.rfind("]") + 1
-            if start >= 0 and end > start:
-                data = json.loads(text[start:end])
-                if isinstance(data, list):
-                    return data
-        except json.JSONDecodeError:
-            pass
-
-        # Third try: find JSON objects line by line
-        for line in text.split("\n"):
-            line = line.strip()
-            if line.startswith("{") and line.endswith("}"):
-                try:
-                    tickets.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-
-        return tickets
+    def _parse_bulk_result(self, result: Any) -> list[dict]:
+        """Parse result from bulk_export_tickets tool"""
+        return self._parse_crawl_result(result)
 
     async def close(self):
-        """Close the client"""
-        await self._client.aclose()
+        """Close the client and cleanup"""
+        if self._sse_task:
+            self._sse_task.cancel()
+            try:
+                await self._sse_task
+            except asyncio.CancelledError:
+                pass
+        if self._client:
+            await self._client.aclose()
 

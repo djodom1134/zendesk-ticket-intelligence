@@ -140,7 +140,7 @@ services:
 
   # ================== Application Services ==================
 
-  # Ingest Service - Fetches tickets from Zendesk A2A agent
+  # Ingest Service - Fetches tickets from Zendesk MCP server
   ingest:
     build:
       context: ../services/ingest
@@ -149,7 +149,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - ZENDESK_AGENT_URL=${ZENDESK_AGENT_URL:-http://192.168.87.79:10004}
+      - ZENDESK_MCP_URL=${ZENDESK_MCP_URL:-http://192.168.87.79:10005/sse}
       - ARANGODB_HOST=arangodb
       - ARANGODB_PORT=8529
       - ZTI_DATA_DIR=/data/zti

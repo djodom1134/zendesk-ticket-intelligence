@@ -1,15 +1,15 @@
 """
 ZTI Ingest Service
-Pulls tickets from Zendesk A2A agent and persists to databases
+Pulls tickets from Zendesk MCP server and persists to databases
 
 Components:
 - main.py: FastAPI application with ingest endpoints
-- client.py: Zendesk A2A protocol client
+- client.py: Zendesk MCP protocol client (SSE transport)
 - storage.py: ArangoDB storage layer
 """
 
-from .client import ZendeskA2AClient
+from .client import ZendeskMCPClient
 from .storage import ArangoStorage
 
-__all__ = ["ZendeskA2AClient", "ArangoStorage"]
+__all__ = ["ZendeskMCPClient", "ArangoStorage"]
 
