@@ -47,17 +47,30 @@ async def fetch_ticket_full_context(client: ZendeskMCPClient, ticket_id: int) ->
     """Fetch a single ticket with full context from MCP."""
     try:
         result = await client.call_tool("get_ticket_full_context", {"ticket_id": ticket_id})
+        print(f"    [FETCH DEBUG] Raw result type: {type(result)}")
+
         if result.get("isError"):
+            print(f"    [FETCH DEBUG] isError=True for ticket {ticket_id}")
             return None
 
         # Parse the result
         if "content" in result:
             for item in result["content"]:
                 if item.get("type") == "text":
-                    return json.loads(item["text"])
+                    parsed = json.loads(item["text"])
+                    # Log key fields
+                    subject = parsed.get("subject", "NO SUBJECT")
+                    images = parsed.get("image_attachments", [])
+                    comments = parsed.get("comments", [])
+                    print(f"    [FETCH DEBUG] Ticket {ticket_id}: subject='{subject[:50] if subject else 'None'}', images={len(images)}, comments={len(comments)}")
+                    return parsed
+
+        print(f"    [FETCH DEBUG] No content in result, returning raw: {str(result)[:200]}")
         return result
     except Exception as e:
         print(f"  ⚠️ Exception fetching {ticket_id}: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
