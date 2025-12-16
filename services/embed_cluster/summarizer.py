@@ -1,6 +1,7 @@
 """
 Ticket Summarizer Service
-Uses a large LLM to summarize tickets before embedding.
+Uses a large LLM to create detailed summaries for embedding.
+Produces comprehensive summaries that fit the embedding model's context window.
 Keeps model loaded for efficient batch processing.
 """
 
@@ -10,36 +11,88 @@ import structlog
 logger = structlog.get_logger()
 
 
-SUMMARIZE_PROMPT = """Summarize this support ticket for clustering purposes.
-Focus on: the core issue, error messages, affected product/feature, and environment.
-Keep it concise (2-4 sentences max).
+# Detailed summary prompt - produces rich summaries for better embedding quality
+# Target: ~2000-4000 tokens output to fit qwen3-embedding's 40K context window
+SUMMARIZE_PROMPT = """You are a support ticket analyst. Create a DETAILED technical summary of this support ticket for semantic clustering and search.
 
-TICKET:
-Subject: {subject}
-Description: {description}
+Your summary should capture ALL of the following (when present):
 
-SUMMARY:"""
+1. **ISSUE CLASSIFICATION**
+   - Primary issue type (bug, feature request, how-to, integration, performance, security, billing, etc.)
+   - Severity/impact level
+   - Whether this is a regression or new issue
+
+2. **TECHNICAL DETAILS**
+   - Exact error messages, codes, and stack traces
+   - Affected product/feature/component/module
+   - API endpoints or functions involved
+   - Configuration settings mentioned
+
+3. **ENVIRONMENT**
+   - Platform (Windows/Mac/Linux/iOS/Android)
+   - Version numbers (product version, OS version, browser, SDK)
+   - Deployment type (cloud, on-prem, hybrid, container, serverless)
+   - Scale/load context if mentioned
+
+4. **REPRODUCTION**
+   - Steps to reproduce if described
+   - Frequency (always, intermittent, specific conditions)
+   - Workarounds attempted or known
+
+5. **TIMELINE & CONTEXT**
+   - When the issue started
+   - Any recent changes (updates, deployments, config changes)
+   - Related tickets or incidents mentioned
+
+6. **CUSTOMER CONTEXT**
+   - Use case being attempted
+   - Business impact described
+   - Urgency indicators
+
+7. **RESOLUTION HINTS**
+   - Any solutions proposed in the thread
+   - What was tried and failed
+   - Documentation or KB articles referenced
+
+Write a comprehensive paragraph-form summary. Include specific technical terms, error codes, version numbers, and keywords that would help match this ticket with similar issues. Do NOT omit details - more context is better for clustering accuracy.
+
+---
+TICKET SUBJECT: {subject}
+
+FULL TICKET CONTENT:
+{description}
+---
+
+DETAILED SUMMARY:"""
 
 
 class TicketSummarizer:
     """Summarizes tickets using a large LLM before embedding.
 
+    Produces detailed summaries (~2000-4000 tokens) that maximize the embedding
+    model's context window for better clustering quality.
+
     Uses Ollama's keep_alive parameter to keep model loaded during batch processing,
     avoiding expensive load/unload cycles per ticket.
     """
+
+    # Target ~6000 chars output (~2000 tokens) to fit well within 40K context
+    DEFAULT_MAX_OUTPUT_TOKENS = 2000
 
     def __init__(
         self,
         ollama_url: str = "http://ollama:11434",
         model: str = "gpt-oss:120b",
         timeout: float = 300.0,
-        max_input_chars: int = 8000,
+        max_input_chars: int = 50000,  # Allow long tickets - model can handle it
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         keep_alive: str = "30m",  # Keep model loaded for 30 minutes
     ):
         self.ollama_url = ollama_url.rstrip("/")
         self.model = model
         self.timeout = timeout
         self.max_input_chars = max_input_chars
+        self.max_output_tokens = max_output_tokens
         self.keep_alive = keep_alive
         self._client = None
 
@@ -70,23 +123,25 @@ class TicketSummarizer:
 
     def summarize(self, subject: str, description: str, is_last: bool = False) -> str:
         """
-        Summarize a single ticket.
+        Create a detailed summary of a single ticket.
 
         Args:
             subject: Ticket subject line
-            description: Full ticket description/body
+            description: Full ticket description/body (including all comments)
             is_last: If True, allow model to unload after this request
 
         Returns:
-            Summarized text suitable for embedding
+            Detailed summary text suitable for embedding (~2000 tokens)
         """
-        # Truncate description if too long
+        # Truncate description if too long for LLM context
         if len(description) > self.max_input_chars:
-            description = description[:self.max_input_chars] + "..."
+            # Keep beginning and end - often resolution info is at the end
+            half = self.max_input_chars // 2
+            description = description[:half] + "\n\n[...content truncated...]\n\n" + description[-half:]
 
         prompt = SUMMARIZE_PROMPT.format(
             subject=subject or "No subject",
-            description=description or "No description",
+            description=description or "No description provided",
         )
 
         try:
@@ -97,8 +152,11 @@ class TicketSummarizer:
                     "model": self.model,
                     "prompt": prompt,
                     "stream": False,
-                    "keep_alive": "0" if is_last else self.keep_alive,  # Unload after last
-                    "options": {"temperature": 0.1, "num_predict": 200},
+                    "keep_alive": "0" if is_last else self.keep_alive,
+                    "options": {
+                        "temperature": 0.2,  # Low temp for factual extraction
+                        "num_predict": self.max_output_tokens,  # Allow long detailed output
+                    },
                 },
             )
             response.raise_for_status()
@@ -106,15 +164,16 @@ class TicketSummarizer:
             summary = result.get("response", "").strip()
 
             if not summary:
-                # Fallback: return truncated original
-                return f"{subject}. {description[:500]}"
+                # Fallback: return original text (will be truncated at embedding stage if needed)
+                logger.warning("Empty summary returned, using original text")
+                return f"Subject: {subject}\n\n{description[:8000]}"
 
             return summary
 
         except Exception as e:
-            logger.warning("Summarization failed, using fallback", error=str(e))
-            # Fallback: return truncated original
-            return f"{subject}. {description[:500]}"
+            logger.warning("Summarization failed, using fallback", error=str(e), ticket_subject=subject[:100])
+            # Fallback: return original text
+            return f"Subject: {subject}\n\n{description[:8000]}"
 
     def summarize_batch(
         self,
