@@ -2,7 +2,7 @@
 # Following NVIDIA txt2kg patterns - multi-stage build
 
 # Stage 1: Dependencies
-FROM node:18-slim AS deps
+FROM node:20-slim AS deps
 WORKDIR /app
 
 # Copy package files
@@ -12,7 +12,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci --legacy-peer-deps
 
 # Stage 2: Builder
-FROM node:18-slim AS builder
+FROM node:20-slim AS builder
 WORKDIR /app
 
 # Copy deps from previous stage
@@ -27,7 +27,7 @@ ENV NODE_ENV=production
 RUN npm run build
 
 # Stage 3: Runner
-FROM node:18-slim AS runner
+FROM node:20-slim AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
