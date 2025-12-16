@@ -69,22 +69,23 @@ DETAILED SUMMARY:"""
 class TicketSummarizer:
     """Summarizes tickets using a large LLM before embedding.
 
-    Produces detailed summaries (~2000-4000 tokens) that maximize the embedding
-    model's context window for better clustering quality.
+    Produces detailed summaries that maximize the embedding model's 40K token
+    context window for better clustering quality.
 
     Uses Ollama's keep_alive parameter to keep model loaded during batch processing,
     avoiding expensive load/unload cycles per ticket.
     """
 
-    # Target ~6000 chars output (~2000 tokens) to fit well within 40K context
-    DEFAULT_MAX_OUTPUT_TOKENS = 2000
+    # Allow up to 16K tokens output - embedding model can handle 40K total
+    # This gives us room for very detailed summaries while leaving headroom
+    DEFAULT_MAX_OUTPUT_TOKENS = 16000
 
     def __init__(
         self,
         ollama_url: str = "http://ollama:11434",
         model: str = "gpt-oss:120b",
-        timeout: float = 300.0,
-        max_input_chars: int = 50000,  # Allow long tickets - model can handle it
+        timeout: float = 600.0,  # Longer timeout for detailed summaries
+        max_input_chars: int = 100000,  # Allow very long tickets
         max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         keep_alive: str = "30m",  # Keep model loaded for 30 minutes
     ):
