@@ -394,11 +394,53 @@ Keep description concise (2-4 sentences). Output ONLY the description."""
         print(f"\n🚀 MAXIMUM GPU UTILIZATION PIPELINE")
         print(f"=" * 60)
         print(f"   🔄 Fetch Thread: Constantly fetching from MCP")
-        print(f"   🖼️  Vision Thread: DEDICATED ministral-3 (always busy)")
-        print(f"   📋 Summary Thread: DEDICATED gpt-oss:120b (always busy)")
+        print(f"   🖼️  Vision Thread: DEDICATED {self.vision_model} (always busy)")
+        print(f"   📋 Summary Thread: DEDICATED {self.summarizer.model} (always busy)")
         print(f"   Buffers: Fetch={self.fetch_queue.maxsize} | Vision={self.vision_queue.maxsize}")
         print(f"\n   ⚡ BOTH GPU MODELS RUN SIMULTANEOUSLY!")
         print(f"=" * 60)
+
+        # PRE-WARM MODELS - Load both models into GPU memory
+        print(f"\n🔥 PRE-WARMING MODELS...")
+        print(f"   Loading {self.vision_model} into GPU...")
+        try:
+            with httpx.Client(timeout=120.0) as client:
+                response = client.post(
+                    f"{self.ollama_url}/api/generate",
+                    json={
+                        "model": self.vision_model,
+                        "prompt": "Hello",
+                        "stream": False,
+                        "options": {"num_predict": 1},
+                    },
+                )
+                if response.status_code == 200:
+                    print(f"   ✅ {self.vision_model} loaded!")
+                else:
+                    print(f"   ⚠️ Vision model response: {response.status_code}")
+        except Exception as e:
+            print(f"   ⚠️ Failed to load vision model: {e}")
+
+        print(f"   Loading {self.summarizer.model} into GPU...")
+        try:
+            with httpx.Client(timeout=120.0) as client:
+                response = client.post(
+                    f"{self.ollama_url}/api/generate",
+                    json={
+                        "model": self.summarizer.model,
+                        "prompt": "Hello",
+                        "stream": False,
+                        "options": {"num_predict": 1},
+                    },
+                )
+                if response.status_code == 200:
+                    print(f"   ✅ {self.summarizer.model} loaded!")
+                else:
+                    print(f"   ⚠️ Summary model response: {response.status_code}")
+        except Exception as e:
+            print(f"   ⚠️ Failed to load summary model: {e}")
+
+        print(f"🔥 Models pre-warmed!\n")
 
         # Start vision thread (GPU worker 1)
         vision_thread = threading.Thread(
