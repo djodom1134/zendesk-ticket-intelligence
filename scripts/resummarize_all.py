@@ -110,68 +110,17 @@ Keep description concise (2-4 sentences). Output ONLY the description, no preamb
     return f"[Image: {filename} - could not process]"
 
 
-async def process_ticket_images(
-    ticket: dict,
-    ollama_url: str,
-    vision_model: str,
-    max_images: int = 5,
-) -> list[dict]:
-    """
-    Download and process image attachments from a ticket.
-    Returns list of {"filename": str, "description": str}.
-    """
-    image_descriptions = []
-
-    # Get image attachments from ticket
-    image_attachments = ticket.get("image_attachments", [])
-    if not image_attachments:
-        return image_descriptions
-
-    # Limit number of images to process
-    images_to_process = image_attachments[:max_images]
-
-    for attachment in images_to_process:
-        filename = attachment.get("file_name", "unknown.jpg")
-        content_url = attachment.get("content_url")
-
-        if not content_url:
-            continue
-
-        print(f"    📷 Processing image: {filename}")
-
-        # Download image
-        image_data = await download_image(content_url)
-        if not image_data:
-            image_descriptions.append({
-                "filename": filename,
-                "description": f"[Image: {filename} - download failed]",
-            })
-            continue
-
-        # Process with vision model
-        description = process_image_with_vision(
-            image_data=image_data,
-            filename=filename,
-            ollama_url=ollama_url,
-            vision_model=vision_model,
-        )
-
-        image_descriptions.append({
-            "filename": filename,
-            "description": description,
-        })
-
-    return image_descriptions
-
-
 class ParallelPipeline:
     """
-    Parallel pipeline with 3 stages running concurrently:
-    1. Fetch tickets from MCP
-    2. Process images with vision model (ministral-3)
-    3. Summarize with text model (gpt-oss)
+    Look-ahead parallel pipeline with image prefetching:
 
-    This allows image processing for ticket N+1 while ticket N is being summarized.
+    1. Fetch Worker: Fetches tickets from MCP
+    2. Image Prefetch Worker: Downloads images, processes with vision model,
+       buffers results AHEAD of summarization (look-ahead prefetch)
+    3. Summary Worker: Consumes pre-processed tickets from buffer
+
+    The image prefetch runs ahead, so when gpt-oss:120b is ready for ticket N,
+    the images for tickets N, N+1, N+2... are already processed and buffered.
     """
 
     def __init__(
@@ -180,7 +129,8 @@ class ParallelPipeline:
         summarizer: TicketSummarizer,
         ollama_url: str,
         vision_model: str = DEFAULT_VISION_MODEL,
-        prefetch_count: int = 3,
+        prefetch_count: int = 5,
+        image_buffer_size: int = 10,
         process_images: bool = True,
     ):
         self.mcp_client = mcp_client
@@ -188,20 +138,27 @@ class ParallelPipeline:
         self.ollama_url = ollama_url
         self.vision_model = vision_model
         self.prefetch_count = prefetch_count
+        self.image_buffer_size = image_buffer_size
         self.process_images = process_images
 
-        # Two-stage queue: fetch -> image processing -> summarization
+        # Stage 1 -> Stage 2: Raw tickets
         self.fetch_queue = asyncio.Queue(maxsize=prefetch_count)
-        self.summary_queue = asyncio.Queue(maxsize=prefetch_count)
 
-        self.results = {}
+        # Stage 2 -> Stage 3: Tickets with pre-processed image summaries
+        # Larger buffer to allow look-ahead
+        self.ready_queue = asyncio.Queue(maxsize=image_buffer_size)
+
         self.fetch_errors = 0
         self.summarize_errors = 0
         self.images_processed = 0
-        self._stop_signal = object()  # Sentinel for stopping workers
+        self.images_buffered = 0
+        self._stop_signal = object()
 
     async def fetch_worker(self, ticket_ids: list[int]):
-        """Stage 1: Fetch tickets from MCP and put in fetch_queue."""
+        """
+        Stage 1: Fetch tickets from MCP.
+        Runs as fast as network allows.
+        """
         for ticket_id in ticket_ids:
             ticket = await fetch_ticket_full_context(self.mcp_client, ticket_id)
             if ticket:
@@ -210,51 +167,79 @@ class ParallelPipeline:
                 self.fetch_errors += 1
                 await self.fetch_queue.put((ticket_id, None))
 
-        # Signal end of fetching
         await self.fetch_queue.put((None, self._stop_signal))
 
-    async def image_worker(self, show_live: bool = True):
+    async def image_prefetch_worker(self, show_live: bool = True):
         """
-        Stage 2: Process images with vision model.
-        Runs in parallel with summarization - while gpt-oss summarizes one ticket,
-        ministral-3 processes images for the next ticket.
+        Stage 2: LOOK-AHEAD image prefetch and processing.
+
+        Downloads images, processes with ministral-3, and buffers the results.
+        This runs AHEAD of summarization - while gpt-oss:120b processes ticket N,
+        this worker is processing images for tickets N+1, N+2, N+3...
+
+        The buffer allows the vision model to stay busy even when the
+        summary model is processing long tickets.
         """
         while True:
             ticket_id, ticket = await self.fetch_queue.get()
 
-            # Check for stop signal
             if ticket is self._stop_signal:
-                await self.summary_queue.put((None, self._stop_signal, []))
+                await self.ready_queue.put((None, self._stop_signal, []))
                 break
 
             if ticket is None:
-                # Fetch failed, pass through
-                await self.summary_queue.put((ticket_id, None, []))
+                await self.ready_queue.put((ticket_id, None, []))
                 continue
 
-            # Process images if enabled
+            # Process images AHEAD of summarization
             image_descriptions = []
             image_attachments = ticket.get("image_attachments", [])
 
             if self.process_images and image_attachments:
-                num_images = len(image_attachments)
+                num_images = min(len(image_attachments), 5)
                 if show_live:
-                    print(f"    🖼️  Processing {num_images} images for ticket {ticket_id}...")
+                    print(f"    🖼️  [PREFETCH] Processing {num_images} images for ticket {ticket_id}...")
 
-                image_descriptions = await process_ticket_images(
-                    ticket=ticket,
-                    ollama_url=self.ollama_url,
-                    vision_model=self.vision_model,
-                    max_images=5,
-                )
-                self.images_processed += len(image_descriptions)
+                # Download and process each image
+                for attachment in image_attachments[:5]:
+                    filename = attachment.get("file_name", "unknown.jpg")
+                    content_url = attachment.get("content_url")
 
-                # Add to ticket for summarizer
+                    if not content_url:
+                        continue
+
+                    # Download image
+                    image_data = await download_image(content_url)
+                    if not image_data:
+                        image_descriptions.append({
+                            "filename": filename,
+                            "description": f"[Image: {filename} - download failed]",
+                        })
+                        continue
+
+                    # Process with vision model
+                    description = process_image_with_vision(
+                        image_data=image_data,
+                        filename=filename,
+                        ollama_url=self.ollama_url,
+                        vision_model=self.vision_model,
+                    )
+
+                    image_descriptions.append({
+                        "filename": filename,
+                        "description": description,
+                    })
+                    self.images_processed += 1
+
+                # Store in ticket for summarizer
                 if image_descriptions:
                     ticket["_image_descriptions"] = image_descriptions
+                    self.images_buffered += 1
+                    if show_live:
+                        print(f"    ✅ [BUFFERED] {len(image_descriptions)} image summaries ready for ticket {ticket_id}")
 
-            # Pass to summary queue
-            await self.summary_queue.put((ticket_id, ticket, image_descriptions))
+            # Put in ready queue (with pre-processed images)
+            await self.ready_queue.put((ticket_id, ticket, image_descriptions))
 
     async def process_tickets(
         self,
@@ -264,12 +249,16 @@ class ParallelPipeline:
         show_live: bool = True,
     ) -> tuple[int, int]:
         """
-        Process tickets with 3-stage parallel pipeline:
-        - Stage 1: Fetch tickets from MCP
-        - Stage 2: Process images with vision model (ministral-3)
-        - Stage 3: Summarize with text model (gpt-oss)
+        Process tickets with LOOK-AHEAD parallel pipeline:
 
-        This allows image processing for ticket N+1 while ticket N is being summarized.
+        - Stage 1: Fetch tickets from MCP (network I/O)
+        - Stage 2: PREFETCH images + process with vision model (ministral-3)
+                   Runs AHEAD, buffering processed images
+        - Stage 3: Summarize with text model (gpt-oss:120b)
+                   Consumes pre-processed tickets from buffer
+
+        The image prefetch runs ahead, so image summaries are already
+        waiting when the 120b model is ready for each ticket.
 
         Returns:
             Tuple of (processed_count, failed_count)
@@ -279,23 +268,26 @@ class ParallelPipeline:
         failed = 0
         start_time = time.time()
 
-        print(f"\n🚀 Starting 3-STAGE PARALLEL pipeline (prefetch={self.prefetch_count})")
+        print(f"\n🚀 LOOK-AHEAD PARALLEL PIPELINE")
+        print(f"=" * 50)
         print(f"   Stage 1: Fetch tickets from MCP")
-        print(f"   Stage 2: Process images with {self.vision_model}")
+        print(f"   Stage 2: PREFETCH images with {self.vision_model} (buffer={self.image_buffer_size})")
         print(f"   Stage 3: Summarize with {self.summarizer.model}")
         print(f"   Images enabled: {self.process_images}")
-        print(f"\n   ⚡ Vision + Summary run in PARALLEL on different models!")
+        print(f"\n   ⚡ Vision model runs AHEAD, pre-processing images")
+        print(f"   ⚡ Image summaries buffered and ready when 120b needs them!")
+        print(f"=" * 50)
 
-        # Start Stage 1: Fetch worker
+        # Start Stage 1: Fetch worker (network I/O)
         fetch_task = asyncio.create_task(self.fetch_worker(ticket_ids))
 
-        # Start Stage 2: Image processing worker
-        image_task = asyncio.create_task(self.image_worker(show_live=show_live))
+        # Start Stage 2: Image PREFETCH worker (runs ahead, buffers results)
+        prefetch_task = asyncio.create_task(self.image_prefetch_worker(show_live=show_live))
 
-        # Stage 3: Summarization (main loop)
+        # Stage 3: Summarization (main loop - consumes from ready_queue)
         while True:
-            # Get next ticket from summary queue (already has images processed)
-            ticket_id, ticket, image_descriptions = await self.summary_queue.get()
+            # Get next ticket from ready queue (images already processed!)
+            ticket_id, ticket, image_descriptions = await self.ready_queue.get()
 
             # Check for end signal
             if ticket is self._stop_signal:
@@ -304,19 +296,19 @@ class ParallelPipeline:
             idx = processed + failed + 1
 
             if ticket is None:
-                # Fetch failed
                 failed += 1
                 print(f"\n[{idx}/{total}] ❌ Failed to fetch ticket {ticket_id}")
                 continue
 
-            # Show ticket info
+            # Show ticket info with buffer status
             num_images = len(image_descriptions)
+            buffer_status = f"[Buffer: {self.ready_queue.qsize()}/{self.image_buffer_size}]"
             if show_live:
-                img_info = f" | 📷 {num_images} images analyzed" if num_images > 0 else ""
-                print(f"\n[{idx}/{total}] 📋 Summarizing ticket {ticket_id}{img_info}")
+                img_info = f" | 📷 {num_images} pre-processed" if num_images > 0 else ""
+                print(f"\n[{idx}/{total}] 📋 Summarizing ticket {ticket_id}{img_info} {buffer_status}")
 
             try:
-                # Summarize (gpt-oss:120b)
+                # Summarize with gpt-oss:120b (images already processed!)
                 summary, metrics = self.summarizer.summarize_full_ticket(
                     ticket=ticket,
                     is_last=(idx == total),
@@ -349,26 +341,28 @@ class ParallelPipeline:
                       f"Rate: {rate:.0f}/hr | "
                       f"ETA: {eta/60:.1f}min | "
                       f"Images: {self.images_processed} | "
+                      f"Buffered: {self.images_buffered} | "
                       f"Fetch Q: {self.fetch_queue.qsize()} | "
-                      f"Summary Q: {self.summary_queue.qsize()}")
+                      f"Ready Q: {self.ready_queue.qsize()}")
 
         # Wait for workers to complete
         await fetch_task
-        await image_task
+        await prefetch_task
 
         return processed, failed
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Re-summarize all tickets with parallel fetch + summarize + vision")
+    parser = argparse.ArgumentParser(description="Re-summarize tickets with look-ahead image prefetch")
     parser.add_argument("--mcp-url", default=DEFAULT_MCP_URL, help="MCP server URL")
     parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL, help="Ollama URL")
-    parser.add_argument("--model", default=DEFAULT_SUMMARY_MODEL, help="Summarization model")
-    parser.add_argument("--vision-model", default=DEFAULT_VISION_MODEL, help="Vision model for images")
+    parser.add_argument("--model", default=DEFAULT_SUMMARY_MODEL, help="Summarization model (gpt-oss:120b)")
+    parser.add_argument("--vision-model", default=DEFAULT_VISION_MODEL, help="Vision model for images (ministral-3)")
     parser.add_argument("--no-images", action="store_true", help="Disable image processing")
     parser.add_argument("--arango-host", default="localhost", help="ArangoDB host")
     parser.add_argument("--arango-port", type=int, default=8529, help="ArangoDB port")
-    parser.add_argument("--prefetch", type=int, default=3, help="Number of tickets to prefetch")
+    parser.add_argument("--prefetch", type=int, default=5, help="Number of tickets to prefetch from MCP")
+    parser.add_argument("--image-buffer", type=int, default=10, help="Image prefetch buffer size (look-ahead)")
     parser.add_argument("--start-from", type=int, default=0, help="Start from ticket index")
     parser.add_argument("--max-tickets", type=int, default=0, help="Max tickets to process (0=all)")
     parser.add_argument("--dry-run", action="store_true", help="Don't save summaries, just test")
@@ -376,14 +370,14 @@ async def main():
     args = parser.parse_args()
 
     print("=" * 60)
-    print("🔄 PARALLEL RE-SUMMARIZATION PIPELINE WITH VISION")
+    print("🚀 LOOK-AHEAD IMAGE PREFETCH PIPELINE")
     print("=" * 60)
     print(f"MCP URL: {args.mcp_url}")
     print(f"Ollama URL: {args.ollama_url}")
     print(f"Summary Model: {args.model}")
     print(f"Vision Model: {args.vision_model}")
     print(f"Process Images: {not args.no_images}")
-    print(f"Prefetch: {args.prefetch} tickets")
+    print(f"Prefetch: {args.prefetch} tickets | Image Buffer: {args.image_buffer}")
     print(f"ArangoDB: {args.arango_host}:{args.arango_port}")
     print(f"Dry run: {args.dry_run}")
     print()
@@ -427,12 +421,14 @@ async def main():
     )
 
     # Create parallel pipeline with vision support
+    # Create look-ahead pipeline with image prefetch buffer
     pipeline = ParallelPipeline(
         mcp_client=mcp_client,
         summarizer=summarizer,
         ollama_url=args.ollama_url,
         vision_model=args.vision_model,
         prefetch_count=args.prefetch,
+        image_buffer_size=args.image_buffer,
         process_images=not args.no_images,
     )
 
