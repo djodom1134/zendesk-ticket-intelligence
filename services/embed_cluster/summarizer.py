@@ -185,6 +185,14 @@ def build_prompt_from_ticket(ticket: dict) -> str:
             custom_fields_parts.append(f"  - {cf.get('name')}: {str(val)[:200]}")
     custom_fields_str = "\n".join(custom_fields_parts) if custom_fields_parts else "  None provided"
 
+    # Build image descriptions if present (from vision model processing)
+    image_descriptions = ticket.get("_image_descriptions", [])
+    if image_descriptions:
+        image_parts = []
+        for img in image_descriptions:
+            image_parts.append(f"  - {img.get('filename')}: {img.get('description')}")
+        conversation += "\n\n[IMAGE ATTACHMENTS - Descriptions from vision analysis]:\n" + "\n".join(image_parts)
+
     return SUMMARIZE_PROMPT.format(
         ticket_id=ticket.get("id", ticket.get("ticket_id", "unknown")),
         subject=ticket.get("subject", "No subject"),
