@@ -484,32 +484,48 @@ Keep description concise (2-4 sentences). Output ONLY the description."""
             self.fetch_queue.put(STOP_SIGNAL)
             print(f"    [FETCH] Done!")
 
+        async def get_result_async():
+            """Get result from queue without blocking the event loop."""
+            while True:
+                try:
+                    return self.result_queue.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(0.1)  # Yield to event loop
+
         # Run fetch in background
         print(f"    [MAIN] Creating fetch task...")
         fetch_task = asyncio.create_task(fetch_all())
         print(f"    [MAIN] Fetch task created, starting result monitoring loop...")
 
-        # Monitor progress and collect results
+        # Monitor progress and collect results (async-friendly)
         results = []
         loop_count = 0
+        last_progress = time.time()
+
         while True:
             loop_count += 1
+
+            # Non-blocking check for results, yield to event loop
             try:
-                print(f"    [MAIN] Waiting for result (loop {loop_count})...")
-                result = self.result_queue.get(timeout=5.0)
+                result = self.result_queue.get_nowait()
                 print(f"    [MAIN] Got result from result_queue: {type(result)}")
             except queue.Empty:
-                # Print progress
-                with self._lock:
-                    elapsed = time.time() - start_time
-                    rate = self.summary_count / elapsed * 3600 if elapsed > 0 else 0
-                    print(f"\n   📊 Fetch: {self.fetch_count}/{total} | "
-                          f"Vision: {self.vision_count} | "
-                          f"Summary: {self.summary_count} | "
-                          f"Rate: {rate:.0f}/hr | "
-                          f"FQ: {self.fetch_queue.qsize()} | "
-                          f"VQ: {self.vision_queue.qsize()}")
-                    print(f"    [MAIN] Vision thread alive: {vision_thread.is_alive()}, Summary thread alive: {summary_thread.is_alive()}")
+                # Yield control to event loop so fetch_all can run
+                await asyncio.sleep(0.1)
+
+                # Print progress every 5 seconds
+                if time.time() - last_progress > 5.0:
+                    with self._lock:
+                        elapsed = time.time() - start_time
+                        rate = self.summary_count / elapsed * 3600 if elapsed > 0 else 0
+                        print(f"\n   📊 Fetch: {self.fetch_count}/{total} | "
+                              f"Vision: {self.vision_count} | "
+                              f"Summary: {self.summary_count} | "
+                              f"Rate: {rate:.0f}/hr | "
+                              f"FQ: {self.fetch_queue.qsize()} | "
+                              f"VQ: {self.vision_queue.qsize()}")
+                        print(f"    [MAIN] Vision thread alive: {vision_thread.is_alive()}, Summary thread alive: {summary_thread.is_alive()}")
+                    last_progress = time.time()
                 continue
 
             if result is STOP_SIGNAL:
