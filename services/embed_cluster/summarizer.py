@@ -365,11 +365,19 @@ class TicketSummarizer:
             self.batch_metrics.total_output_chars += metrics.output_chars
             self.batch_metrics.total_latency_seconds += metrics.latency_seconds
 
-            # Log progress every 10 tickets or show compact metrics
+            # Show metrics and summary
             if show_live:
-                print(f"   ⏱️  {metrics.latency_seconds:.1f}s | "
+                print(f"\n   ⏱️  {metrics.latency_seconds:.1f}s | "
                       f"📊 {metrics.tokens_per_second:.1f} tok/s | "
                       f"📝 {metrics.output_tokens} tokens", flush=True)
+                print(f"\n   📄 SUMMARY:\n   {'-'*56}", flush=True)
+                # Indent summary for readability
+                summary_lines = summary[:2000].split('\n')  # Show first 2000 chars
+                for line in summary_lines[:20]:  # Max 20 lines preview
+                    print(f"   {line}", flush=True)
+                if len(summary) > 2000 or len(summary_lines) > 20:
+                    print(f"   ... [{len(summary)} chars total]", flush=True)
+                print(f"   {'-'*56}\n", flush=True)
 
             if (i + 1) % 10 == 0:
                 self.batch_metrics.log_progress()
