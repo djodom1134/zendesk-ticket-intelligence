@@ -22,7 +22,7 @@ logger = structlog.get_logger()
 
 # Environment-based defaults
 DEFAULT_OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
-DEFAULT_SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "nemotron-3-nano:latest")
+DEFAULT_SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gpt-oss:120b")
 
 
 @dataclass
@@ -95,17 +95,18 @@ class BatchMetrics:
 
 # Anti-hallucination prompt - extracts ONLY information present in ticket
 # Structured format for consistent parsing and embedding
+# Always outputs in English (translates if necessary)
 SUMMARIZE_PROMPT = """You are a support ticket analyst. Extract a structured summary from the ticket below.
 
-CRITICAL RULES - FOLLOW EXACTLY:
-1. ONLY include information EXPLICITLY stated in the ticket content
-2. If a section has no information in the ticket, write "[Not provided]"
-3. Do NOT infer, assume, or fabricate ANY details
-4. Do NOT add example commands, API paths, KB articles, or version numbers unless explicitly in the ticket
-5. Quote exact error messages verbatim when present
-6. Mark agent responses vs customer messages clearly
+IMPORTANT: Output ONLY the structured summary in ENGLISH. Do NOT include any reasoning, thinking, or explanation. Start directly with "**TICKET SUMMARY**". Translate all non-English content to English.
 
----
+CRITICAL RULES:
+1. ONLY include information EXPLICITLY stated in the ticket
+2. If a section has no information, write "[Not provided]"
+3. Do NOT infer or fabricate details
+4. Quote exact error messages verbatim (translate to English if needed)
+5. ALL OUTPUT MUST BE IN ENGLISH - translate any non-English content
+
 TICKET METADATA:
 - Ticket ID: {ticket_id}
 - Subject: {subject}
@@ -123,41 +124,36 @@ CUSTOM FIELDS:
 
 CONVERSATION ({comment_count} comments, {word_count} words):
 {conversation}
----
 
-OUTPUT FORMAT (use exactly this structure):
+OUTPUT (ALL IN ENGLISH):
 
 **TICKET SUMMARY**
 - ID: {ticket_id}
 - Agent: {agent_name}
-- Total Comments: {comment_count}
-- Word Count: {word_count}
-- Density: [sparse (<100 words) / moderate (100-300) / detailed (>300)]
+- Comments: {comment_count}
+- Density: [sparse/moderate/detailed]
 
-**ISSUE CLASSIFICATION**
-- Type: [license/bug/feature/how-to/integration/etc - based on content]
-- Category: [from tags or content]
+**ISSUE**
+- Type: [license/bug/feature/how-to/integration/other]
+- Category: [from tags]
 - Severity: [stated or "not specified"]
 
-**PROBLEM DESCRIPTION**
-[1-2 sentence summary of what the customer reported - use their exact words where possible]
+**PROBLEM**
+[1-2 sentence English summary of the customer's issue]
 
-**TECHNICAL DETAILS**
-- Error Messages: [exact quotes or "none provided"]
-- Affected Component: [specific component mentioned or "not specified"]
-- Software Version: [from custom fields/tags or "not specified"]
-- License Keys: [if mentioned, list them, or "not provided"]
-- Hardware ID: [if mentioned or "not provided"]
+**TECHNICAL**
+- Error: [exact quote in English or "none"]
+- Component: [affected component or "not specified"]
+- Version: [software version or "not specified"]
+- License Keys: [if any or "none"]
+- Hardware ID: [if any or "none"]
 
-**RESOLUTION STATUS**
-- Agent Response: [summarize what the agent said/advised]
-- Customer Follow-up: [did customer respond? what did they say?]
-- Resolution: [resolved/pending/closed without response/etc]
+**RESOLUTION**
+- Agent Action: [what agent did/advised, in English]
+- Customer Response: [customer's reply or "no response"]
+- Status: [resolved/pending/closed without response]
 
-**KEYWORDS** (for clustering):
-[5-7 relevant terms extracted from the ticket]
-
-STRUCTURED SUMMARY:"""
+**KEYWORDS**: [5-7 English terms for clustering]"""
 
 
 def build_prompt_from_ticket(ticket: dict) -> str:
