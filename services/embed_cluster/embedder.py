@@ -23,14 +23,14 @@ class TicketEmbedder:
     """
 
     # Max characters to send to embedding model
-    # nomic-embed-text has 8192 token context, but tokenization varies
-    # Using 4000 chars to be safe with average of 1.5 chars/token
-    MAX_TEXT_LENGTH = 4000
+    # qwen3-embedding has 40K token context window
+    # Using 60000 chars to be safe with average of 1.5 chars/token
+    MAX_TEXT_LENGTH = 60000
 
     def __init__(
         self,
         ollama_url: str = "http://localhost:11434",
-        model: str = "nomic-embed-text",
+        model: str = "qwen3-embedding:8b",
         use_local: bool = False,
         max_length: int = None,
     ):
