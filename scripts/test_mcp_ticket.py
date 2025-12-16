@@ -3,12 +3,12 @@
 import asyncio
 import json
 import sys
-import httpx
+import requests
 sys.path.insert(0, ".")
 from services.ingest.client import ZendeskMCPClient
 
 MCP_URL = "http://192.168.87.79:10005/sse"
-OLLAMA_URL = "http://10.0.0.242:11434"  # Remote GPU
+OLLAMA_URL = "http://192.168.87.134:11434"  # GPU server
 
 def parse_ticket_result(result: dict) -> dict:
     """Parse MCP tool result to get ticket data"""
@@ -169,22 +169,23 @@ STRUCTURED SUMMARY:"""
 
     return prompt
 
-async def summarize_ticket(ticket: dict) -> str:
-    """Call LLM to summarize ticket"""
+def summarize_ticket_sync(ticket: dict) -> str:
+    """Call LLM to summarize ticket (synchronous)"""
     prompt = build_summary_prompt(ticket)
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        response = await client.post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model": "gpt-oss:120b",
-                "prompt": prompt,
-                "stream": False,
-                "options": {"temperature": 0.1, "num_predict": 1500}
-            }
-        )
-        result = response.json()
-        return result.get("response", "ERROR: No response")
+    print("  Sending to LLM (this may take 30-60 seconds)...")
+    response = requests.post(
+        f"{OLLAMA_URL}/api/generate",
+        json={
+            "model": "gpt-oss:120b",
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.1, "num_predict": 1500}
+        },
+        timeout=300
+    )
+    result = response.json()
+    return result.get("response", "ERROR: No response")
 
 async def get_ticket(ticket_id: int):
     client = ZendeskMCPClient(MCP_URL)
@@ -218,7 +219,7 @@ async def get_ticket(ticket_id: int):
         print("PART 2: AI SUMMARY")
         print("=" * 80)
         print("\nGenerating summary (anti-hallucination mode)...")
-        summary = await summarize_ticket(ticket)
+        summary = summarize_ticket_sync(ticket)
         print("\n" + summary)
 
         # Hallucination check
