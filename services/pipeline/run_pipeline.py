@@ -29,11 +29,17 @@ from services.embed_cluster.labeler import ClusterLabeler
 @click.option("--skip-embed", is_flag=True, help="Skip embedding step")
 @click.option("--skip-cluster", is_flag=True, help="Skip clustering step")
 @click.option("--skip-label", is_flag=True, help="Skip labeling step")
+@click.option("--enable-redaction", is_flag=True, help="Enable PII redaction (disabled by default)")
+@click.option("--ollama-url", default=None, help="Ollama URL (default: from OLLAMA_URL env or http://ollama:11434)")
 def main(input_file: str, output_dir: str, skip_normalize: bool, skip_embed: bool,
-         skip_cluster: bool, skip_label: bool):
+         skip_cluster: bool, skip_label: bool, enable_redaction: bool, ollama_url: str):
     """Run the ZTI pipeline on ticket data."""
 
     os.makedirs(output_dir, exist_ok=True)
+
+    # Resolve Ollama URL
+    ollama_url_resolved = ollama_url or os.getenv("OLLAMA_URL", "http://ollama:11434")
+    log.info("Pipeline config", ollama_url=ollama_url_resolved, redaction=enable_redaction)
 
     # Load input
     log.info("Loading input tickets", file=input_file)
@@ -43,9 +49,8 @@ def main(input_file: str, output_dir: str, skip_normalize: bool, skip_embed: boo
 
     # Step 1: Normalize
     if not skip_normalize:
-        log.info("Step 1: Normalizing tickets...")
-        # TicketNormalizer includes redaction already
-        normalizer = TicketNormalizer()
+        log.info("Step 1: Normalizing tickets...", redaction=enable_redaction)
+        normalizer = TicketNormalizer(enable_redaction=enable_redaction)
 
         normalized = []
         for ticket in tickets:
@@ -67,10 +72,10 @@ def main(input_file: str, output_dir: str, skip_normalize: bool, skip_embed: boo
     # Step 2: Embed
     embeddings = None
     if not skip_embed:
-        log.info("Step 2: Generating embeddings...")
-        embedder = TicketEmbedder()
+        log.info("Step 2: Generating embeddings...", ollama_url=ollama_url_resolved)
+        embedder = TicketEmbedder(ollama_url=ollama_url_resolved)
 
-        texts = [t.get("combined_text", "") or f"{t.get('subject', '')} {t.get('description', '')}"
+        texts = [t.get("ticket_fulltext", "") or f"{t.get('subject', '')} {t.get('description', '')}"
                  for t in tickets]
         embeddings = embedder.embed_batch(texts)
 

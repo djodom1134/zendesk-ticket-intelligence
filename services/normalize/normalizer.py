@@ -47,8 +47,14 @@ class TicketNormalizer:
     # Version pattern (e.g., 6.0.5, v2.1.0, version 3.2)
     VERSION_PATTERN = re.compile(r'\b(?:v(?:ersion)?\.?\s*)?(\d+\.\d+(?:\.\d+)?)\b', re.I)
 
-    def __init__(self, redactor: Optional[PIIRedactor] = None):
-        self.redactor = redactor or PIIRedactor()
+    def __init__(self, redactor: Optional[PIIRedactor] = None, enable_redaction: bool = False):
+        """
+        Args:
+            redactor: Optional PIIRedactor instance
+            enable_redaction: If True, apply PII redaction (default: False)
+        """
+        self.enable_redaction = enable_redaction
+        self.redactor = redactor or (PIIRedactor() if enable_redaction else None)
 
     def normalize(self, raw: dict) -> TicketDocument:
         """
@@ -86,13 +92,18 @@ class TicketNormalizer:
         comment_texts = [c.body_text for c in comments]
         fulltext = self._build_fulltext(subject, description, comment_texts)
 
-        # Apply PII redaction
-        description_redacted = self.redactor.redact(description)
-        pii_redacted_text = self.redactor.redact(fulltext)
-
-        # Redact comments
-        for comment in comments:
-            comment.body_redacted = self.redactor.redact(comment.body_text)
+        # Apply PII redaction only if enabled
+        if self.enable_redaction and self.redactor:
+            description_redacted = self.redactor.redact(description)
+            pii_redacted_text = self.redactor.redact(fulltext)
+            for comment in comments:
+                comment.body_redacted = self.redactor.redact(comment.body_text)
+        else:
+            # No redaction - use original text
+            description_redacted = description
+            pii_redacted_text = fulltext
+            for comment in comments:
+                comment.body_redacted = comment.body_text
 
         return TicketDocument(
             ticket_id=str(raw.get("id", "")),

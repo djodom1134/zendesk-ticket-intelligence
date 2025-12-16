@@ -14,6 +14,10 @@ scikit-learn>=1.3.0
 umap-learn>=0.5.0
 hdbscan>=0.8.0
 
+# Embeddings (fallback when Ollama unavailable)
+sentence-transformers>=2.2.0
+torch>=2.0.0
+
 # API
 fastapi>=0.100.0
 uvicorn>=0.23.0
