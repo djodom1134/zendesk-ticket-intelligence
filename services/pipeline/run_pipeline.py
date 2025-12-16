@@ -73,14 +73,14 @@ def main(input_file: str, output_dir: str, skip_normalize: bool, skip_summarize:
     else:
         log.info("Skipping normalization")
 
-    # Step 2: Summarize (for long tickets)
+    # Step 2: Summarize (with streaming and metrics)
     summaries = None
     if not skip_summarize:
-        log.info("Step 2: Summarizing tickets...", model=summarize_model)
+        log.info("Step 2: Summarizing tickets with streaming...", model=summarize_model)
         summarizer = TicketSummarizer(ollama_url=ollama_url_resolved, model=summarize_model)
-        summaries = summarizer.summarize_batch(tickets)
+        summaries, batch_metrics = summarizer.summarize_batch(tickets, show_live=True)
 
-        # Save summaries
+        # Save summaries and metrics
         summary_file = os.path.join(output_dir, "summaries.json")
         with open(summary_file, "w") as f:
             summary_data = [{"ticket_id": t.get("ticket_id") or t.get("id"), "summary": s}

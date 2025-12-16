@@ -3,12 +3,89 @@ Ticket Summarizer Service
 Uses a large LLM to create detailed summaries for embedding.
 Produces comprehensive summaries that fit the embedding model's context window.
 Keeps model loaded for efficient batch processing.
+
+Features:
+- Streaming output for live progress visibility
+- Performance metrics (tokens/sec, latency, throughput)
 """
 
+import json
+import sys
+import time
+from dataclasses import dataclass, field
+from typing import Iterator, Optional
 import httpx
 import structlog
 
 logger = structlog.get_logger()
+
+
+@dataclass
+class SummaryMetrics:
+    """Metrics for a single summary generation."""
+    ticket_id: str
+    input_chars: int
+    output_tokens: int
+    output_chars: int
+    latency_seconds: float
+    tokens_per_second: float
+    time_to_first_token: Optional[float] = None
+
+
+@dataclass
+class BatchMetrics:
+    """Aggregate metrics for batch summarization."""
+    total_tickets: int = 0
+    completed: int = 0
+    failed: int = 0
+    total_input_chars: int = 0
+    total_output_tokens: int = 0
+    total_output_chars: int = 0
+    total_latency_seconds: float = 0.0
+    start_time: float = field(default_factory=time.time)
+
+    @property
+    def avg_tokens_per_second(self) -> float:
+        if self.total_latency_seconds > 0:
+            return self.total_output_tokens / self.total_latency_seconds
+        return 0.0
+
+    @property
+    def avg_latency(self) -> float:
+        if self.completed > 0:
+            return self.total_latency_seconds / self.completed
+        return 0.0
+
+    @property
+    def elapsed_seconds(self) -> float:
+        return time.time() - self.start_time
+
+    @property
+    def tickets_per_minute(self) -> float:
+        if self.elapsed_seconds > 0:
+            return (self.completed / self.elapsed_seconds) * 60
+        return 0.0
+
+    @property
+    def eta_seconds(self) -> float:
+        if self.completed > 0:
+            remaining = self.total_tickets - self.completed
+            avg_time = self.elapsed_seconds / self.completed
+            return remaining * avg_time
+        return 0.0
+
+    def log_progress(self):
+        """Log current progress with metrics."""
+        eta_min = self.eta_seconds / 60
+        logger.info(
+            "Summarization progress",
+            progress=f"{self.completed}/{self.total_tickets}",
+            tps=f"{self.avg_tokens_per_second:.1f}",
+            avg_latency=f"{self.avg_latency:.1f}s",
+            throughput=f"{self.tickets_per_minute:.1f}/min",
+            eta=f"{eta_min:.1f}min",
+            total_tokens=self.total_output_tokens,
+        )
 
 
 # Detailed summary prompt - produces rich summaries for better embedding quality
@@ -69,25 +146,23 @@ DETAILED SUMMARY:"""
 class TicketSummarizer:
     """Summarizes tickets using a large LLM before embedding.
 
-    Produces detailed summaries that maximize the embedding model's 40K token
-    context window for better clustering quality.
-
-    Uses Ollama's keep_alive parameter to keep model loaded during batch processing,
-    avoiding expensive load/unload cycles per ticket.
+    Features:
+    - Streaming output for live visibility
+    - Performance metrics tracking (TPS, latency, throughput)
+    - Efficient batch processing with model kept loaded
     """
 
-    # Allow up to 16K tokens output - embedding model can handle 40K total
-    # This gives us room for very detailed summaries while leaving headroom
     DEFAULT_MAX_OUTPUT_TOKENS = 16000
 
     def __init__(
         self,
         ollama_url: str = "http://ollama:11434",
         model: str = "gpt-oss:120b",
-        timeout: float = 600.0,  # Longer timeout for detailed summaries
-        max_input_chars: int = 100000,  # Allow very long tickets
+        timeout: float = 600.0,
+        max_input_chars: int = 100000,
         max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
-        keep_alive: str = "30m",  # Keep model loaded for 30 minutes
+        keep_alive: str = "30m",
+        stream: bool = True,  # Enable streaming by default
     ):
         self.ollama_url = ollama_url.rstrip("/")
         self.model = model
@@ -95,19 +170,20 @@ class TicketSummarizer:
         self.max_input_chars = max_input_chars
         self.max_output_tokens = max_output_tokens
         self.keep_alive = keep_alive
+        self.stream = stream
         self._client = None
+        self.batch_metrics: Optional[BatchMetrics] = None
 
     def _get_client(self) -> httpx.Client:
         """Get or create a persistent HTTP client for connection reuse."""
         if self._client is None:
-            self._client = httpx.Client(timeout=self.timeout)
+            self._client = httpx.Client(timeout=httpx.Timeout(self.timeout, connect=30.0))
         return self._client
 
     def _preload_model(self):
         """Preload the model before batch processing."""
         logger.info("Preloading model", model=self.model)
         try:
-            # Send empty prompt with long keep_alive to load model
             client = self._get_client()
             response = client.post(
                 f"{self.ollama_url}/api/generate",
@@ -122,21 +198,24 @@ class TicketSummarizer:
         except Exception as e:
             logger.warning("Model preload failed, will load on first request", error=str(e))
 
-    def summarize(self, subject: str, description: str, is_last: bool = False) -> str:
+    def summarize_streaming(
+        self,
+        subject: str,
+        description: str,
+        ticket_id: str = "",
+        is_last: bool = False,
+        show_live: bool = True,
+    ) -> tuple[str, SummaryMetrics]:
         """
-        Create a detailed summary of a single ticket.
-
-        Args:
-            subject: Ticket subject line
-            description: Full ticket description/body (including all comments)
-            is_last: If True, allow model to unload after this request
+        Summarize a ticket with streaming output and metrics.
 
         Returns:
-            Detailed summary text suitable for embedding (~2000 tokens)
+            Tuple of (summary_text, metrics)
         """
-        # Truncate description if too long for LLM context
+        input_chars = len(description)
+
+        # Truncate if needed
         if len(description) > self.max_input_chars:
-            # Keep beginning and end - often resolution info is at the end
             half = self.max_input_chars // 2
             description = description[:half] + "\n\n[...content truncated...]\n\n" + description[-half:]
 
@@ -145,78 +224,167 @@ class TicketSummarizer:
             description=description or "No description provided",
         )
 
+        start_time = time.time()
+        time_to_first_token = None
+        output_tokens = 0
+        summary_parts = []
+
         try:
-            client = self._get_client()
-            response = client.post(
+            # Use streaming request
+            with self._get_client().stream(
+                "POST",
                 f"{self.ollama_url}/api/generate",
                 json={
                     "model": self.model,
                     "prompt": prompt,
-                    "stream": False,
+                    "stream": True,
                     "keep_alive": "0" if is_last else self.keep_alive,
                     "options": {
-                        "temperature": 0.2,  # Low temp for factual extraction
-                        "num_predict": self.max_output_tokens,  # Allow long detailed output
+                        "temperature": 0.2,
+                        "num_predict": self.max_output_tokens,
                     },
                 },
+            ) as response:
+                response.raise_for_status()
+
+                if show_live:
+                    # Print header for this ticket
+                    print(f"\n{'='*60}", flush=True)
+                    print(f"📋 Ticket {ticket_id}: {subject[:60]}...", flush=True)
+                    print(f"{'='*60}", flush=True)
+
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                        token = chunk.get("response", "")
+                        if token:
+                            if time_to_first_token is None:
+                                time_to_first_token = time.time() - start_time
+                            summary_parts.append(token)
+                            output_tokens += 1
+                            if show_live:
+                                print(token, end="", flush=True)
+
+                        # Check if done
+                        if chunk.get("done", False):
+                            break
+                    except json.JSONDecodeError:
+                        continue
+
+                if show_live:
+                    print("\n", flush=True)
+
+            total_time = time.time() - start_time
+            summary = "".join(summary_parts).strip()
+
+            metrics = SummaryMetrics(
+                ticket_id=ticket_id,
+                input_chars=input_chars,
+                output_tokens=output_tokens,
+                output_chars=len(summary),
+                latency_seconds=total_time,
+                tokens_per_second=output_tokens / total_time if total_time > 0 else 0,
+                time_to_first_token=time_to_first_token,
             )
-            response.raise_for_status()
-            result = response.json()
-            summary = result.get("response", "").strip()
 
             if not summary:
-                # Fallback: return original text (will be truncated at embedding stage if needed)
                 logger.warning("Empty summary returned, using original text")
-                return f"Subject: {subject}\n\n{description[:8000]}"
+                return f"Subject: {subject}\n\n{description[:8000]}", metrics
 
-            return summary
+            return summary, metrics
 
         except Exception as e:
-            logger.warning("Summarization failed, using fallback", error=str(e), ticket_subject=subject[:100])
-            # Fallback: return original text
-            return f"Subject: {subject}\n\n{description[:8000]}"
+            total_time = time.time() - start_time
+            logger.warning("Summarization failed", error=str(e), ticket_subject=subject[:100])
+            metrics = SummaryMetrics(
+                ticket_id=ticket_id,
+                input_chars=input_chars,
+                output_tokens=0,
+                output_chars=0,
+                latency_seconds=total_time,
+                tokens_per_second=0,
+            )
+            return f"Subject: {subject}\n\n{description[:8000]}", metrics
 
     def summarize_batch(
         self,
         tickets: list[dict],
         subject_key: str = "subject",
         description_key: str = "description",
-    ) -> list[str]:
+        show_live: bool = True,
+    ) -> tuple[list[str], BatchMetrics]:
         """
-        Summarize a batch of tickets efficiently.
-
-        Keeps the model loaded for the entire batch, then unloads after completion.
+        Summarize a batch of tickets with streaming output and metrics.
 
         Args:
             tickets: List of ticket dictionaries
             subject_key: Key for subject field
             description_key: Key for description field
+            show_live: If True, stream output to stdout
 
         Returns:
-            List of summarized texts
+            Tuple of (list of summaries, batch metrics)
         """
         summaries = []
         total = len(tickets)
 
+        self.batch_metrics = BatchMetrics(total_tickets=total)
+
         if total == 0:
-            return summaries
+            return summaries, self.batch_metrics
 
         # Preload model before batch
         self._preload_model()
 
-        for i, ticket in enumerate(tickets):
-            if i % 25 == 0:
-                logger.info("Summarizing tickets", progress=f"{i}/{total}")
+        print(f"\n🚀 Starting summarization of {total} tickets with {self.model}", flush=True)
+        print(f"   Streaming: {'enabled' if show_live else 'disabled'}", flush=True)
+        print(f"   Max output tokens: {self.max_output_tokens}", flush=True)
 
+        for i, ticket in enumerate(tickets):
+            ticket_id = ticket.get("ticket_id") or ticket.get("id") or str(i)
             subject = ticket.get(subject_key, "")
             description = ticket.get(description_key, "") or ticket.get("ticket_fulltext", "")
-
             is_last = (i == total - 1)
-            summary = self.summarize(subject, description, is_last=is_last)
+
+            summary, metrics = self.summarize_streaming(
+                subject=subject,
+                description=description,
+                ticket_id=str(ticket_id),
+                is_last=is_last,
+                show_live=show_live,
+            )
+
             summaries.append(summary)
 
-        logger.info("Summarization complete", total=total)
-        return summaries
+            # Update batch metrics
+            self.batch_metrics.completed += 1
+            self.batch_metrics.total_input_chars += metrics.input_chars
+            self.batch_metrics.total_output_tokens += metrics.output_tokens
+            self.batch_metrics.total_output_chars += metrics.output_chars
+            self.batch_metrics.total_latency_seconds += metrics.latency_seconds
+
+            # Log progress every 10 tickets or show compact metrics
+            if show_live:
+                print(f"   ⏱️  {metrics.latency_seconds:.1f}s | "
+                      f"📊 {metrics.tokens_per_second:.1f} tok/s | "
+                      f"📝 {metrics.output_tokens} tokens", flush=True)
+
+            if (i + 1) % 10 == 0:
+                self.batch_metrics.log_progress()
+
+        # Final summary
+        print(f"\n{'='*60}", flush=True)
+        print(f"✅ Summarization complete!", flush=True)
+        print(f"   Total tickets: {self.batch_metrics.completed}", flush=True)
+        print(f"   Total tokens: {self.batch_metrics.total_output_tokens:,}", flush=True)
+        print(f"   Total time: {self.batch_metrics.elapsed_seconds:.1f}s", flush=True)
+        print(f"   Avg TPS: {self.batch_metrics.avg_tokens_per_second:.1f}", flush=True)
+        print(f"   Throughput: {self.batch_metrics.tickets_per_minute:.1f} tickets/min", flush=True)
+        print(f"{'='*60}\n", flush=True)
+
+        return summaries, self.batch_metrics
 
     def __del__(self):
         """Cleanup HTTP client on destruction."""
