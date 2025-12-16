@@ -44,14 +44,17 @@ def main(input_file: str, output_dir: str, skip_normalize: bool, skip_embed: boo
     # Step 1: Normalize
     if not skip_normalize:
         log.info("Step 1: Normalizing tickets...")
+        # TicketNormalizer includes redaction already
         normalizer = TicketNormalizer()
-        redactor = PIIRedactor()
 
         normalized = []
         for ticket in tickets:
-            norm = normalizer.normalize(ticket)
-            norm = redactor.redact(norm)
-            normalized.append(norm)
+            try:
+                norm = normalizer.normalize(ticket)
+                # Convert Pydantic model to dict for JSON serialization
+                normalized.append(norm.model_dump() if hasattr(norm, 'model_dump') else norm)
+            except Exception as e:
+                log.warning("Failed to normalize ticket", ticket_id=ticket.get("id"), error=str(e))
 
         norm_file = os.path.join(output_dir, "tickets_normalized.json")
         with open(norm_file, "w") as f:
