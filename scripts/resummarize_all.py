@@ -57,7 +57,7 @@ async def fetch_ticket_full_context(client: ZendeskMCPClient, ticket_id: int) ->
 
 
 async def download_image(url: str, timeout: float = 30.0) -> bytes | None:
-    """Download an image from a Zendesk attachment URL."""
+    """Download an image from a Zendesk attachment URL (async)."""
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(url, follow_redirects=True)
@@ -69,17 +69,16 @@ async def download_image(url: str, timeout: float = 30.0) -> bytes | None:
         return None
 
 
-def process_image_with_vision(
+async def process_image_with_vision_async(
     image_data: bytes,
     filename: str,
     ollama_url: str,
     vision_model: str,
 ) -> str:
     """
-    Process an image using the vision model to get a description.
-    Returns a text description of the image content.
+    Process an image using the vision model (ASYNC).
+    Uses httpx.AsyncClient so it doesn't block the event loop.
     """
-    # Encode image as base64
     image_b64 = base64.b64encode(image_data).decode("utf-8")
 
     prompt = """Describe this image from a support ticket. Focus on:
@@ -90,8 +89,8 @@ def process_image_with_vision(
 Keep description concise (2-4 sentences). Output ONLY the description, no preamble."""
 
     try:
-        with httpx.Client(timeout=60.0) as client:
-            response = client.post(
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            response = await client.post(
                 f"{ollama_url}/api/generate",
                 json={
                     "model": vision_model,
@@ -171,14 +170,13 @@ class ParallelPipeline:
 
     async def image_prefetch_worker(self, show_live: bool = True):
         """
-        Stage 2: LOOK-AHEAD image prefetch and processing.
+        Stage 2: LOOK-AHEAD image prefetch and processing (ASYNC).
 
         Downloads images, processes with ministral-3, and buffers the results.
         This runs AHEAD of summarization - while gpt-oss:120b processes ticket N,
         this worker is processing images for tickets N+1, N+2, N+3...
 
-        The buffer allows the vision model to stay busy even when the
-        summary model is processing long tickets.
+        Uses async HTTP calls so it doesn't block the event loop.
         """
         while True:
             ticket_id, ticket = await self.fetch_queue.get()
@@ -191,45 +189,52 @@ class ParallelPipeline:
                 await self.ready_queue.put((ticket_id, None, []))
                 continue
 
-            # Process images AHEAD of summarization
+            # Process images AHEAD of summarization (all async!)
             image_descriptions = []
             image_attachments = ticket.get("image_attachments", [])
 
             if self.process_images and image_attachments:
                 num_images = min(len(image_attachments), 5)
                 if show_live:
-                    print(f"    🖼️  [PREFETCH] Processing {num_images} images for ticket {ticket_id}...")
+                    print(f"    🖼️  [PREFETCH] Starting {num_images} images for ticket {ticket_id}...")
 
-                # Download and process each image
-                for attachment in image_attachments[:5]:
+                # Process all images concurrently using asyncio.gather
+                async def process_single_image(attachment):
                     filename = attachment.get("file_name", "unknown.jpg")
                     content_url = attachment.get("content_url")
 
                     if not content_url:
-                        continue
+                        return None
 
-                    # Download image
+                    # Download image (async)
                     image_data = await download_image(content_url)
                     if not image_data:
-                        image_descriptions.append({
+                        return {
                             "filename": filename,
                             "description": f"[Image: {filename} - download failed]",
-                        })
-                        continue
+                        }
 
-                    # Process with vision model
-                    description = process_image_with_vision(
+                    # Process with vision model (async - doesn't block!)
+                    description = await process_image_with_vision_async(
                         image_data=image_data,
                         filename=filename,
                         ollama_url=self.ollama_url,
                         vision_model=self.vision_model,
                     )
 
-                    image_descriptions.append({
+                    return {
                         "filename": filename,
                         "description": description,
-                    })
-                    self.images_processed += 1
+                    }
+
+                # Process all images concurrently
+                tasks = [process_single_image(att) for att in image_attachments[:5]]
+                results = await asyncio.gather(*tasks)
+
+                for result in results:
+                    if result:
+                        image_descriptions.append(result)
+                        self.images_processed += 1
 
                 # Store in ticket for summarizer
                 if image_descriptions:
@@ -241,6 +246,15 @@ class ParallelPipeline:
             # Put in ready queue (with pre-processed images)
             await self.ready_queue.put((ticket_id, ticket, image_descriptions))
 
+    async def _run_summarizer_in_thread(self, ticket, is_last, show_live):
+        """Run the synchronous summarizer in a thread pool to not block the event loop."""
+        return await asyncio.to_thread(
+            self.summarizer.summarize_full_ticket,
+            ticket=ticket,
+            is_last=is_last,
+            show_live=show_live,
+        )
+
     async def process_tickets(
         self,
         ticket_ids: list[int],
@@ -249,16 +263,16 @@ class ParallelPipeline:
         show_live: bool = True,
     ) -> tuple[int, int]:
         """
-        Process tickets with LOOK-AHEAD parallel pipeline:
+        Process tickets with TRUE PARALLEL pipeline:
 
-        - Stage 1: Fetch tickets from MCP (network I/O)
-        - Stage 2: PREFETCH images + process with vision model (ministral-3)
+        - Stage 1: Fetch tickets from MCP (async network I/O)
+        - Stage 2: PREFETCH images + process with vision model (async)
                    Runs AHEAD, buffering processed images
-        - Stage 3: Summarize with text model (gpt-oss:120b)
-                   Consumes pre-processed tickets from buffer
+        - Stage 3: Summarize with text model (runs in thread pool)
 
-        The image prefetch runs ahead, so image summaries are already
-        waiting when the 120b model is ready for each ticket.
+        All stages run truly in parallel:
+        - Image prefetch continues while summarizer is busy
+        - Summarizer runs in thread so it doesn't block async event loop
 
         Returns:
             Tuple of (processed_count, failed_count)
@@ -268,23 +282,23 @@ class ParallelPipeline:
         failed = 0
         start_time = time.time()
 
-        print(f"\n🚀 LOOK-AHEAD PARALLEL PIPELINE")
+        print(f"\n🚀 TRUE PARALLEL PIPELINE")
         print(f"=" * 50)
-        print(f"   Stage 1: Fetch tickets from MCP")
-        print(f"   Stage 2: PREFETCH images with {self.vision_model} (buffer={self.image_buffer_size})")
-        print(f"   Stage 3: Summarize with {self.summarizer.model}")
+        print(f"   Stage 1: Fetch tickets from MCP (async)")
+        print(f"   Stage 2: PREFETCH images with {self.vision_model} (async, buffer={self.image_buffer_size})")
+        print(f"   Stage 3: Summarize with {self.summarizer.model} (thread pool)")
         print(f"   Images enabled: {self.process_images}")
-        print(f"\n   ⚡ Vision model runs AHEAD, pre-processing images")
-        print(f"   ⚡ Image summaries buffered and ready when 120b needs them!")
+        print(f"\n   ⚡ ALL STAGES RUN IN PARALLEL!")
+        print(f"   ⚡ Vision processes images while 120b summarizes previous ticket")
         print(f"=" * 50)
 
-        # Start Stage 1: Fetch worker (network I/O)
+        # Start Stage 1: Fetch worker (async network I/O)
         fetch_task = asyncio.create_task(self.fetch_worker(ticket_ids))
 
-        # Start Stage 2: Image PREFETCH worker (runs ahead, buffers results)
+        # Start Stage 2: Image PREFETCH worker (async, runs ahead)
         prefetch_task = asyncio.create_task(self.image_prefetch_worker(show_live=show_live))
 
-        # Stage 3: Summarization (main loop - consumes from ready_queue)
+        # Stage 3: Summarization (consumes from ready_queue, runs in thread)
         while True:
             # Get next ticket from ready queue (images already processed!)
             ticket_id, ticket, image_descriptions = await self.ready_queue.get()
@@ -308,8 +322,9 @@ class ParallelPipeline:
                 print(f"\n[{idx}/{total}] 📋 Summarizing ticket {ticket_id}{img_info} {buffer_status}")
 
             try:
-                # Summarize with gpt-oss:120b (images already processed!)
-                summary, metrics = self.summarizer.summarize_full_ticket(
+                # Summarize with gpt-oss:120b IN THREAD (doesn't block event loop!)
+                # While this runs, image_prefetch_worker continues processing next tickets
+                summary, metrics = await self._run_summarizer_in_thread(
                     ticket=ticket,
                     is_last=(idx == total),
                     show_live=show_live,
