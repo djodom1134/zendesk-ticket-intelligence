@@ -126,13 +126,25 @@ class ClusterLabeler:
 
     def _parse_response(self, response: str) -> dict:
         """Parse JSON from LLM response"""
+        import re
+
+        # Strip markdown code blocks if present
+        response = response.strip()
+        if response.startswith("```"):
+            # Remove ```json or ``` prefix and trailing ```
+            lines = response.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]  # Remove first line
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]  # Remove last line
+            response = "\n".join(lines)
+
         try:
             # Try direct JSON parse
             return json.loads(response)
         except json.JSONDecodeError:
-            # Try to extract JSON from response
-            import re
-            match = re.search(r'\{.*\}', response, re.DOTALL)
+            # Try to extract JSON object from response
+            match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
             if match:
                 try:
                     return json.loads(match.group())
