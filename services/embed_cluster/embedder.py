@@ -68,8 +68,8 @@ class TicketEmbedder:
             List of floats (embedding vector)
         """
         if not text or not text.strip():
-            # Return zero vector for empty text
-            return [0.0] * (self._dimension or 768)
+            # Return zero vector for empty text (4096 dims for qwen3-embedding:8b)
+            return [0.0] * (self._dimension or 4096)
 
         # Truncate text if too long
         original_len = len(text)

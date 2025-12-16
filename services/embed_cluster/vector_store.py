@@ -32,7 +32,7 @@ class VectorStore:
         host: str = "localhost",
         port: int = 6333,
         collection: str = TICKET_COLLECTION,
-        dimension: int = 768,
+        dimension: int = 4096,  # qwen3-embedding:8b produces 4096-dim vectors
     ):
         """
         Args:
