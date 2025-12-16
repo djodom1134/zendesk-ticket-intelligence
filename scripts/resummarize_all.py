@@ -48,6 +48,7 @@ async def fetch_ticket_full_context(client: ZendeskMCPClient, ticket_id: int) ->
     try:
         result = await client.call_tool("get_ticket_full_context", {"ticket_id": ticket_id})
         print(f"    [FETCH DEBUG] Raw result type: {type(result)}")
+        print(f"    [FETCH DEBUG] Raw result keys: {result.keys() if isinstance(result, dict) else 'not a dict'}")
 
         if result.get("isError"):
             print(f"    [FETCH DEBUG] isError=True for ticket {ticket_id}")
@@ -57,15 +58,19 @@ async def fetch_ticket_full_context(client: ZendeskMCPClient, ticket_id: int) ->
         if "content" in result:
             for item in result["content"]:
                 if item.get("type") == "text":
-                    parsed = json.loads(item["text"])
+                    text_content = item["text"]
+                    print(f"    [FETCH DEBUG] Text content length: {len(text_content)}")
+                    print(f"    [FETCH DEBUG] Text preview: {text_content[:500]}...")
+                    parsed = json.loads(text_content)
                     # Log key fields
                     subject = parsed.get("subject", "NO SUBJECT")
                     images = parsed.get("image_attachments", [])
                     comments = parsed.get("comments", [])
+                    print(f"    [FETCH DEBUG] Parsed keys: {list(parsed.keys())}")
                     print(f"    [FETCH DEBUG] Ticket {ticket_id}: subject='{subject[:50] if subject else 'None'}', images={len(images)}, comments={len(comments)}")
                     return parsed
 
-        print(f"    [FETCH DEBUG] No content in result, returning raw: {str(result)[:200]}")
+        print(f"    [FETCH DEBUG] No content in result, returning raw: {str(result)[:500]}")
         return result
     except Exception as e:
         print(f"  ⚠️ Exception fetching {ticket_id}: {e}")
