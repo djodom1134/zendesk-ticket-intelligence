@@ -169,12 +169,63 @@ class ChatResponse(BaseModel):
     ask_for_info: List[str] = []  # Questions to ask customer
 
 
+class WeeklyTrend(BaseModel):
+    """Weekly ticket volume with trend calculation."""
+    week_start: str  # ISO date
+    count: int
+    change_pct: Optional[float] = None  # vs previous week
+
+
+class ClusterGrowth(BaseModel):
+    """Cluster growth metrics."""
+    cluster_id: str
+    label: str
+    current_size: int
+    previous_size: int
+    growth_rate: float  # percentage change
+    is_new: bool  # appeared this week
+
+
+class ResolutionMetrics(BaseModel):
+    """Resolution time statistics."""
+    avg_hours: float
+    median_hours: float
+    p90_hours: float  # 90th percentile
+    trend_pct: float  # change vs previous period
+
+
+class DeflectionMetrics(BaseModel):
+    """Deflection potential based on cluster characteristics."""
+    total_deflectable: int  # tickets that could be auto-responded
+    deflection_rate: float  # percentage of total
+    top_deflectable_clusters: List[dict]  # clusters with highest deflection potential
+    estimated_hours_saved: float  # assuming avg 5 min per ticket
+
+
 class StatsResponse(BaseModel):
+    # Basic counts
     total_clusters: int
     total_tickets: int
     avg_confidence: float
     trending_up: int
-    tickets_last_7d: int = 0
+
+    # Weekly trends
+    tickets_this_week: int = 0
+    tickets_last_week: int = 0
+    week_over_week_change: float = 0.0  # percentage
+    weekly_trend: List[WeeklyTrend] = []  # last 8 weeks
+
+    # Cluster growth
+    new_clusters_this_week: int = 0
+    growing_clusters: List[ClusterGrowth] = []
+
+    # Resolution times
+    resolution: Optional[ResolutionMetrics] = None
+
+    # Deflection potential
+    deflection: Optional[DeflectionMetrics] = None
+
+    # Top clusters (for backward compat)
     top_clusters: List[dict] = []
 
 
@@ -191,11 +242,13 @@ async def health_check():
 
 @app.get("/api/stats", response_model=StatsResponse)
 async def get_stats():
-    """Get dashboard statistics."""
+    """Get comprehensive dashboard statistics with real KPI calculations."""
     try:
         db = get_db()
+
+        # Basic cluster stats
         clusters = list(db.collection("clusters").all())
-        tickets = db.collection("tickets").count()
+        total_tickets = db.collection("tickets").count()
 
         if clusters:
             avg_conf = sum(c.get("confidence", 0) for c in clusters) / len(clusters)
@@ -204,13 +257,191 @@ async def get_stats():
             avg_conf = 0
             trending = 0
 
+        # ============================================================
+        # 1. Weekly Ticket Trend (last 8 weeks)
+        # ============================================================
+        weekly_trend = []
+        try:
+            weekly_data = list(db.aql.execute("""
+                LET now = DATE_NOW()
+                FOR week_offset IN 0..7
+                    LET week_start = DATE_SUBTRACT(now, week_offset, "week")
+                    LET week_end = DATE_SUBTRACT(now, week_offset - 1, "week")
+                    LET count = LENGTH(
+                        FOR t IN tickets
+                            FILTER t.created_at >= DATE_ISO8601(week_start)
+                            FILTER t.created_at < DATE_ISO8601(week_end)
+                            RETURN 1
+                    )
+                    RETURN {
+                        week_start: DATE_ISO8601(week_start),
+                        count: count,
+                        week_offset: week_offset
+                    }
+            """))
+
+            # Calculate week-over-week changes
+            for i, week in enumerate(weekly_data):
+                change_pct = None
+                if i < len(weekly_data) - 1 and weekly_data[i + 1]["count"] > 0:
+                    prev_count = weekly_data[i + 1]["count"]
+                    change_pct = ((week["count"] - prev_count) / prev_count) * 100
+                weekly_trend.append(WeeklyTrend(
+                    week_start=week["week_start"][:10],
+                    count=week["count"],
+                    change_pct=round(change_pct, 1) if change_pct is not None else None
+                ))
+
+            tickets_this_week = weekly_data[0]["count"] if weekly_data else 0
+            tickets_last_week = weekly_data[1]["count"] if len(weekly_data) > 1 else 0
+            wow_change = 0.0
+            if tickets_last_week > 0:
+                wow_change = ((tickets_this_week - tickets_last_week) / tickets_last_week) * 100
+        except Exception:
+            tickets_this_week = 0
+            tickets_last_week = 0
+            wow_change = 0.0
+
+        # ============================================================
+        # 2. Cluster Growth Rate
+        # ============================================================
+        growing_clusters = []
+        new_clusters_this_week = 0
+        try:
+            # Compare current cluster sizes to stored historical sizes
+            for c in clusters:
+                current_size = c.get("size", 0)
+                previous_size = c.get("previous_size", current_size)  # Stored from last week
+                created_at = c.get("created_at", "")
+
+                # Check if cluster is new (created within last 7 days)
+                is_new = False
+                if created_at:
+                    from datetime import datetime, timedelta
+                    try:
+                        created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                        is_new = (datetime.now(created.tzinfo) - created).days <= 7
+                        if is_new:
+                            new_clusters_this_week += 1
+                    except Exception:
+                        pass
+
+                growth_rate = 0.0
+                if previous_size > 0:
+                    growth_rate = ((current_size - previous_size) / previous_size) * 100
+
+                if abs(growth_rate) > 5 or is_new:  # Only include significant changes
+                    growing_clusters.append(ClusterGrowth(
+                        cluster_id=c["_key"],
+                        label=c.get("label", "Unknown"),
+                        current_size=current_size,
+                        previous_size=previous_size,
+                        growth_rate=round(growth_rate, 1),
+                        is_new=is_new
+                    ))
+
+            # Sort by growth rate descending
+            growing_clusters.sort(key=lambda x: x.growth_rate, reverse=True)
+            growing_clusters = growing_clusters[:10]  # Top 10
+        except Exception:
+            pass
+
+        # ============================================================
+        # 3. Resolution Time Metrics
+        # ============================================================
+        resolution = None
+        try:
+            resolution_data = list(db.aql.execute("""
+                LET resolved_tickets = (
+                    FOR t IN tickets
+                        FILTER t.status == "solved" OR t.status == "closed"
+                        FILTER t.created_at != null AND t.solved_at != null
+                        LET hours = DATE_DIFF(t.created_at, t.solved_at, "hour")
+                        FILTER hours > 0 AND hours < 720  // Exclude outliers (>30 days)
+                        RETURN hours
+                )
+                LET sorted = SORTED(resolved_tickets)
+                LET count = LENGTH(sorted)
+                RETURN {
+                    avg: count > 0 ? AVERAGE(resolved_tickets) : 0,
+                    median: count > 0 ? sorted[FLOOR(count / 2)] : 0,
+                    p90: count > 0 ? sorted[FLOOR(count * 0.9)] : 0,
+                    count: count
+                }
+            """))
+
+            if resolution_data and resolution_data[0]["count"] > 0:
+                rd = resolution_data[0]
+                resolution = ResolutionMetrics(
+                    avg_hours=round(rd["avg"], 1),
+                    median_hours=round(rd["median"], 1),
+                    p90_hours=round(rd["p90"], 1),
+                    trend_pct=0.0  # TODO: Compare to previous period
+                )
+        except Exception:
+            pass
+
+        # ============================================================
+        # 4. Deflection Potential
+        # ============================================================
+        deflection = None
+        try:
+            # Deflectable = clusters with high confidence + recommended_response
+            deflectable_clusters = [
+                c for c in clusters
+                if c.get("confidence", 0) >= 0.7 and c.get("recommended_response")
+            ]
+
+            total_deflectable = sum(c.get("size", 0) for c in deflectable_clusters)
+            deflection_rate = (total_deflectable / total_tickets * 100) if total_tickets > 0 else 0
+
+            # Estimate hours saved: 5 min per deflected ticket
+            hours_saved = (total_deflectable * 5) / 60
+
+            top_deflectable = [
+                {
+                    "cluster_id": c["_key"],
+                    "label": c.get("label", "Unknown"),
+                    "size": c.get("size", 0),
+                    "confidence": c.get("confidence", 0),
+                }
+                for c in sorted(deflectable_clusters, key=lambda x: x.get("size", 0), reverse=True)[:5]
+            ]
+
+            deflection = DeflectionMetrics(
+                total_deflectable=total_deflectable,
+                deflection_rate=round(deflection_rate, 1),
+                top_deflectable_clusters=top_deflectable,
+                estimated_hours_saved=round(hours_saved, 1)
+            )
+        except Exception:
+            pass
+
+        # ============================================================
+        # Top clusters for backward compatibility
+        # ============================================================
+        top_clusters = [
+            {"id": c["_key"], "label": c.get("label", ""), "size": c.get("size", 0)}
+            for c in sorted(clusters, key=lambda x: x.get("size", 0), reverse=True)[:5]
+        ]
+
         return StatsResponse(
             total_clusters=len(clusters),
-            total_tickets=tickets,
+            total_tickets=total_tickets,
             avg_confidence=round(avg_conf, 2),
-            trending_up=trending
+            trending_up=trending,
+            tickets_this_week=tickets_this_week,
+            tickets_last_week=tickets_last_week,
+            week_over_week_change=round(wow_change, 1),
+            weekly_trend=weekly_trend,
+            new_clusters_this_week=new_clusters_this_week,
+            growing_clusters=growing_clusters,
+            resolution=resolution,
+            deflection=deflection,
+            top_clusters=top_clusters,
         )
     except Exception as e:
+        logger.error("Stats calculation failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
