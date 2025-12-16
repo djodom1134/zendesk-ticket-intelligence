@@ -120,6 +120,8 @@ services:
       # GPU Configuration (addresses PRD issue #2 - GPU fallback fix)
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # Bind to all interfaces for network access
+      - OLLAMA_HOST=0.0.0.0
       # Performance optimizations from txt2kg
       - OLLAMA_FLASH_ATTENTION=1
       - OLLAMA_KEEP_ALIVE=30m
