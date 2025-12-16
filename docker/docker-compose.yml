@@ -1,11 +1,17 @@
 # ZTI Docker Compose - Zendesk Ticket Intelligence
 # Based on NVIDIA txt2kg patterns with ZTI-specific adaptations
 #
-# Known Issues Addressed (from PRD Section 5):
-#   1. Path typo fix: All paths verified correct
-#   2. GPU fallback fix: OLLAMA_LLM_LIBRARY=cuda_v13 + startup self-test
-#   3. Qdrant instead of Pinecone (ARM-friendly, per NVIDIA forum)
-#   4. Ollama healthcheck uses 'ollama list' not curl (avoids missing curl issue)
+# Usage:
+#   docker compose up -d                 # Start all services
+#   docker compose up -d arangodb qdrant ollama  # Start infrastructure only
+#   docker compose logs -f pipeline      # Follow pipeline logs
+#   docker compose exec pipeline python -m services.ingest.cli fetch --days 90
+#
+# Architecture (following txt2kg):
+#   Infrastructure: ArangoDB (graph), Qdrant (vectors), Ollama (LLM)
+#   Pipeline: Single Python container for ingest, normalize, embed, cluster
+#   API: FastAPI backend serving cluster data
+#   UI: Next.js frontend for visualization
 
 services:
   # ================== Infrastructure ==================
@@ -140,23 +146,56 @@ services:
 
   # ================== Application Services ==================
 
-  # Ingest Service - Fetches tickets from Zendesk MCP server
-  ingest:
+  # Pipeline - Unified Python container for ingest, normalize, embed, cluster
+  pipeline:
     build:
-      context: ../services/ingest
-      dockerfile: Dockerfile
-    container_name: zti-ingest
+      context: ..
+      dockerfile: docker/Dockerfile.pipeline
+    container_name: zti-pipeline
+    environment:
+      - ZENDESK_MCP_URL=${ZENDESK_MCP_URL:-http://host.docker.internal:10005/sse}
+      - ARANGODB_HOST=arangodb
+      - ARANGODB_PORT=8529
+      - ARANGODB_DB=zti
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - OLLAMA_URL=http://ollama:11434
+      - ZTI_DATA_DIR=/data/zti
+    volumes:
+      - pipeline_data:/data/zti
+      - ../services:/app/services:ro
+      - ../shared:/app/shared:ro
+    depends_on:
+      arangodb:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    networks:
+      - zti-network
+    # Keep container running for interactive use
+    command: ["tail", "-f", "/dev/null"]
+
+  # API - FastAPI backend for serving cluster data to UI
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    container_name: zti-api
     ports:
       - "8000:8000"
     environment:
-      - ZENDESK_MCP_URL=${ZENDESK_MCP_URL:-http://192.168.87.79:10005/sse}
       - ARANGODB_HOST=arangodb
       - ARANGODB_PORT=8529
-      - ZTI_DATA_DIR=/data/zti
-    volumes:
-      - ingest_data:/data/zti
+      - ARANGODB_DB=zti
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - OLLAMA_URL=http://ollama:11434
     depends_on:
       arangodb:
+        condition: service_healthy
+      qdrant:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -168,12 +207,29 @@ services:
     networks:
       - zti-network
 
+  # UI - Next.js frontend for cluster visualization
+  ui:
+    build:
+      context: ../services/ui/cluster-explorer
+      dockerfile: Dockerfile
+    container_name: zti-ui
+    ports:
+      - "3000:3000"
+    environment:
+      - API_URL=http://api:8000
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - zti-network
+
 volumes:
   arangodb_data:
   arangodb_apps_data:
   qdrant_data:
   ollama_data:
-  ingest_data:
+  pipeline_data:
 
 networks:
   zti-network:
