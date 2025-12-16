@@ -73,15 +73,35 @@ def main(input_file: str, output_dir: str, skip_normalize: bool, skip_summarize:
     else:
         log.info("Skipping normalization")
 
-    # Step 2: Summarize (with streaming and metrics)
+    # Step 2: Summarize (with streaming, metrics, and resume support)
     summaries = None
+    summary_file = os.path.join(output_dir, "summaries.json")
+
     if not skip_summarize:
         log.info("Step 2: Summarizing tickets with streaming...", model=summarize_model)
-        summarizer = TicketSummarizer(ollama_url=ollama_url_resolved, model=summarize_model)
-        summaries, batch_metrics = summarizer.summarize_batch(tickets, show_live=True)
 
-        # Save summaries and metrics
-        summary_file = os.path.join(output_dir, "summaries.json")
+        # Load existing summaries for resume capability
+        existing_summaries = {}
+        if os.path.exists(summary_file):
+            try:
+                with open(summary_file, "r") as f:
+                    existing_data = json.load(f)
+                    existing_summaries = {
+                        str(item["ticket_id"]): item["summary"]
+                        for item in existing_data if item.get("summary")
+                    }
+                log.info("Loaded existing summaries for resume", count=len(existing_summaries))
+            except Exception as e:
+                log.warning("Could not load existing summaries", error=str(e))
+
+        summarizer = TicketSummarizer(ollama_url=ollama_url_resolved, model=summarize_model)
+        summaries, batch_metrics = summarizer.summarize_batch(
+            tickets,
+            show_live=True,
+            existing_summaries=existing_summaries,
+        )
+
+        # Save summaries (overwrite with complete set)
         with open(summary_file, "w") as f:
             summary_data = [{"ticket_id": t.get("ticket_id") or t.get("id"), "summary": s}
                            for t, s in zip(tickets, summaries)]

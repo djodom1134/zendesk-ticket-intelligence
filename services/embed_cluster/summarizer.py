@@ -314,44 +314,65 @@ class TicketSummarizer:
         subject_key: str = "subject",
         description_key: str = "description",
         show_live: bool = True,
+        existing_summaries: dict[str, str] | None = None,
     ) -> tuple[list[str], BatchMetrics]:
         """
         Summarize a batch of tickets with streaming output and metrics.
+        Skips tickets that already have summaries.
 
         Args:
             tickets: List of ticket dictionaries
             subject_key: Key for subject field
             description_key: Key for description field
             show_live: If True, stream output to stdout
+            existing_summaries: Dict of ticket_id -> summary for already processed tickets
 
         Returns:
             Tuple of (list of summaries, batch metrics)
         """
+        existing_summaries = existing_summaries or {}
         summaries = []
         total = len(tickets)
+        skipped = 0
 
         self.batch_metrics = BatchMetrics(total_tickets=total)
 
         if total == 0:
             return summaries, self.batch_metrics
 
-        # Preload model before batch
-        self._preload_model()
+        # Count how many we'll skip
+        for ticket in tickets:
+            ticket_id = str(ticket.get("ticket_id") or ticket.get("id") or "")
+            if ticket_id in existing_summaries:
+                skipped += 1
 
-        print(f"\n🚀 Starting summarization of {total} tickets with {self.model}", flush=True)
-        print(f"   Streaming: {'enabled' if show_live else 'disabled'}", flush=True)
+        to_process = total - skipped
+
+        print(f"\n🚀 Starting summarization with {self.model}", flush=True)
+        print(f"   Total tickets: {total}", flush=True)
+        print(f"   Already summarized (skipping): {skipped}", flush=True)
+        print(f"   To process: {to_process}", flush=True)
         print(f"   Max output tokens: {self.max_output_tokens}", flush=True)
 
+        if to_process > 0:
+            self._preload_model()
+
         for i, ticket in enumerate(tickets):
-            ticket_id = ticket.get("ticket_id") or ticket.get("id") or str(i)
+            ticket_id = str(ticket.get("ticket_id") or ticket.get("id") or str(i))
             subject = ticket.get(subject_key, "")
+
+            # Skip if already summarized
+            if ticket_id in existing_summaries:
+                summaries.append(existing_summaries[ticket_id])
+                continue
+
             description = ticket.get(description_key, "") or ticket.get("ticket_fulltext", "")
             is_last = (i == total - 1)
 
             summary, metrics = self.summarize_streaming(
                 subject=subject,
                 description=description,
-                ticket_id=str(ticket_id),
+                ticket_id=ticket_id,
                 is_last=is_last,
                 show_live=show_live,
             )
@@ -365,27 +386,25 @@ class TicketSummarizer:
             self.batch_metrics.total_output_chars += metrics.output_chars
             self.batch_metrics.total_latency_seconds += metrics.latency_seconds
 
-            # Show metrics and summary
-            if show_live:
-                print(f"\n   ⏱️  {metrics.latency_seconds:.1f}s | "
-                      f"📊 {metrics.tokens_per_second:.1f} tok/s | "
-                      f"📝 {metrics.output_tokens} tokens", flush=True)
-                print(f"\n   📄 SUMMARY:\n   {'-'*56}", flush=True)
-                # Indent summary for readability
-                summary_lines = summary[:2000].split('\n')  # Show first 2000 chars
-                for line in summary_lines[:20]:  # Max 20 lines preview
-                    print(f"   {line}", flush=True)
-                if len(summary) > 2000 or len(summary_lines) > 20:
-                    print(f"   ... [{len(summary)} chars total]", flush=True)
-                print(f"   {'-'*56}\n", flush=True)
+            # Calculate rates and ETA
+            tickets_per_hour = self.batch_metrics.tickets_per_minute * 60
+            remaining = to_process - self.batch_metrics.completed
+            eta_hours = remaining / tickets_per_hour if tickets_per_hour > 0 else 0
 
-            if (i + 1) % 10 == 0:
+            # Show compact KPIs
+            if show_live:
+                print(f"\n   📊 [{self.batch_metrics.completed}/{to_process}] "
+                      f"Rate: {tickets_per_hour:.0f}/hr | "
+                      f"TPS: {self.batch_metrics.avg_tokens_per_second:.1f} | "
+                      f"ETA: {eta_hours:.1f}h", flush=True)
+
+            if (self.batch_metrics.completed) % 10 == 0:
                 self.batch_metrics.log_progress()
 
         # Final summary
         print(f"\n{'='*60}", flush=True)
         print(f"✅ Summarization complete!", flush=True)
-        print(f"   Total tickets: {self.batch_metrics.completed}", flush=True)
+        print(f"   Processed: {self.batch_metrics.completed} | Skipped: {skipped}", flush=True)
         print(f"   Total tokens: {self.batch_metrics.total_output_tokens:,}", flush=True)
         print(f"   Total time: {self.batch_metrics.elapsed_seconds:.1f}s", flush=True)
         print(f"   Avg TPS: {self.batch_metrics.avg_tokens_per_second:.1f}", flush=True)
