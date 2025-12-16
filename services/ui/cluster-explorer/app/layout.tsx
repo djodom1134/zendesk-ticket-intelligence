@@ -47,10 +47,17 @@ export default function RootLayout({
                 </Link>
                 <Link
                   href="/search"
-                  className="flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 transition-colors border border-[#76b900]/40 text-[#76b900] bg-[#76b900]/10 hover:bg-[#76b900]/20"
+                  className="flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 transition-colors hover:bg-muted"
                 >
                   <Search className="h-4 w-4" />
                   <span>Search</span>
+                </Link>
+                <Link
+                  href="/chat"
+                  className="flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 transition-colors border border-[#76b900]/40 text-[#76b900] bg-[#76b900]/10 hover:bg-[#76b900]/20"
+                >
+                  <MessageSquare className="h-4 w-4" />
+                  <span>Tier-0 Chat</span>
                 </Link>
                 <ThemeToggle />
               </nav>

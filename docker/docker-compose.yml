@@ -177,7 +177,7 @@ services:
     # Keep container running for interactive use
     command: ["tail", "-f", "/dev/null"]
 
-  # API - FastAPI backend for serving cluster data to UI
+  # API - FastAPI backend for serving cluster data, search, and Tier-0 chat
   api:
     build:
       context: ..
@@ -191,11 +191,16 @@ services:
       - ARANGODB_DB=zti
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
+      - QDRANT_COLLECTION=ticket_embeddings
       - OLLAMA_URL=http://ollama:11434
+      - EMBED_MODEL=qwen3-embedding:8b
+      - CHAT_MODEL=gpt-oss:120b
     depends_on:
       arangodb:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+      ollama:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
