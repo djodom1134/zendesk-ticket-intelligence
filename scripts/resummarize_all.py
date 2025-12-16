@@ -59,15 +59,19 @@ async def fetch_ticket_full_context(client: ZendeskMCPClient, ticket_id: int) ->
             for item in result["content"]:
                 if item.get("type") == "text":
                     text_content = item["text"]
-                    print(f"    [FETCH DEBUG] Text content length: {len(text_content)}")
-                    print(f"    [FETCH DEBUG] Text preview: {text_content[:500]}...")
                     parsed = json.loads(text_content)
+
+                    # Check for MCP error response
+                    if "error" in parsed:
+                        print(f"    ❌ [MCP ERROR] {parsed.get('error')}")
+                        print(f"    ❌ [MCP ERROR] Code: {parsed.get('code')}")
+                        return None
+
                     # Log key fields
                     subject = parsed.get("subject", "NO SUBJECT")
                     images = parsed.get("image_attachments", [])
                     comments = parsed.get("comments", [])
-                    print(f"    [FETCH DEBUG] Parsed keys: {list(parsed.keys())}")
-                    print(f"    [FETCH DEBUG] Ticket {ticket_id}: subject='{subject[:50] if subject else 'None'}', images={len(images)}, comments={len(comments)}")
+                    print(f"    [FETCH] Ticket {ticket_id}: subject='{(subject[:50] if subject else 'None')}', images={len(images)}, comments={len(comments)}")
                     return parsed
 
         print(f"    [FETCH DEBUG] No content in result, returning raw: {str(result)[:500]}")
