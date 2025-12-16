@@ -217,41 +217,52 @@ Keep description concise (2-4 sentences). Output ONLY the description."""
         This thread runs independently, keeping ministral-3 busy.
         Pulls from fetch_queue, processes images, pushes to vision_queue.
         """
+        print(f"    [VISION THREAD] Started, waiting for tickets...")
         while not self._stop_event.is_set():
             try:
-                item = self.fetch_queue.get(timeout=1.0)
+                print(f"    [VISION THREAD] Waiting on fetch_queue (size={self.fetch_queue.qsize()})...")
+                item = self.fetch_queue.get(timeout=5.0)
+                print(f"    [VISION THREAD] Got item from fetch_queue")
             except queue.Empty:
+                print(f"    [VISION THREAD] Timeout waiting for fetch_queue")
                 continue
 
             if item is STOP_SIGNAL:
+                print(f"    [VISION THREAD] Received STOP_SIGNAL, exiting")
                 self.vision_queue.put(STOP_SIGNAL)
                 break
 
             ticket_id, ticket = item
+            print(f"    [VISION THREAD] Processing ticket {ticket_id}")
 
             if ticket is None:
+                print(f"    [VISION THREAD] Ticket {ticket_id} is None, passing through")
                 self.vision_queue.put(TicketWorkItem(ticket_id, None, []))
                 continue
 
             # Process images
             image_descriptions = []
             image_attachments = ticket.get("image_attachments", [])
+            print(f"    [VISION THREAD] Ticket {ticket_id} has {len(image_attachments)} images")
 
             if self.process_images and image_attachments:
                 num_images = min(len(image_attachments), 5)
-                if show_live:
-                    print(f"    🖼️  [VISION] Processing {num_images} images for ticket {ticket_id}...")
+                print(f"    🖼️  [VISION] Processing {num_images} images for ticket {ticket_id}...")
 
-                for attachment in image_attachments[:5]:
+                for i, attachment in enumerate(image_attachments[:5]):
                     filename = attachment.get("file_name", "unknown.jpg")
                     content_url = attachment.get("content_url")
+                    print(f"    [VISION THREAD] Image {i+1}/{num_images}: {filename}")
 
                     if not content_url:
+                        print(f"    [VISION THREAD] No content_url for {filename}")
                         continue
 
                     # Download (I/O)
+                    print(f"    [VISION THREAD] Downloading {filename}...")
                     image_data = self._download_image_sync(content_url)
                     if not image_data:
+                        print(f"    [VISION THREAD] Download failed for {filename}")
                         image_descriptions.append({
                             "filename": filename,
                             "description": f"[Image: {filename} - download failed]",
@@ -259,7 +270,9 @@ Keep description concise (2-4 sentences). Output ONLY the description."""
                         continue
 
                     # Process with vision model (GPU)
+                    print(f"    [VISION THREAD] Sending {filename} to vision model...")
                     description = self._process_image_vision_sync(image_data, filename)
+                    print(f"    [VISION THREAD] Got description for {filename}: {description[:50]}...")
                     image_descriptions.append({
                         "filename": filename,
                         "description": description,
@@ -270,13 +283,16 @@ Keep description concise (2-4 sentences). Output ONLY the description."""
 
                 if image_descriptions:
                     ticket["_image_descriptions"] = image_descriptions
-                    if show_live:
-                        print(f"    ✅ [VISION] {len(image_descriptions)} images ready for ticket {ticket_id}")
+                    print(f"    ✅ [VISION] {len(image_descriptions)} images ready for ticket {ticket_id}")
+            else:
+                print(f"    [VISION THREAD] No images to process for ticket {ticket_id}")
 
             with self._lock:
                 self.vision_count += 1
 
+            print(f"    [VISION THREAD] Putting ticket {ticket_id} in vision_queue...")
             self.vision_queue.put(TicketWorkItem(ticket_id, ticket, image_descriptions))
+            print(f"    [VISION THREAD] Done with ticket {ticket_id}")
 
     def summary_thread_worker(self, db_collection, dry_run: bool, show_live: bool, total: int):
         """
@@ -285,19 +301,26 @@ Keep description concise (2-4 sentences). Output ONLY the description."""
         This thread runs independently, keeping gpt-oss:120b busy.
         Pulls from vision_queue, summarizes, pushes to result_queue.
         """
+        print(f"    [SUMMARY THREAD] Started, waiting for tickets...")
         while not self._stop_event.is_set():
             try:
-                item = self.vision_queue.get(timeout=1.0)
+                print(f"    [SUMMARY THREAD] Waiting on vision_queue (size={self.vision_queue.qsize()})...")
+                item = self.vision_queue.get(timeout=5.0)
+                print(f"    [SUMMARY THREAD] Got item from vision_queue")
             except queue.Empty:
+                print(f"    [SUMMARY THREAD] Timeout waiting for vision_queue")
                 continue
 
             if item is STOP_SIGNAL:
+                print(f"    [SUMMARY THREAD] Received STOP_SIGNAL, exiting")
                 self.result_queue.put(STOP_SIGNAL)
                 break
 
             work_item: TicketWorkItem = item
+            print(f"    [SUMMARY THREAD] Processing ticket {work_item.ticket_id}")
 
             if work_item.ticket is None:
+                print(f"    [SUMMARY THREAD] Ticket {work_item.ticket_id} is None, marking failed")
                 with self._lock:
                     self.failed_count += 1
                 self.result_queue.put(("failed", work_item.ticket_id, None))
@@ -307,20 +330,22 @@ Keep description concise (2-4 sentences). Output ONLY the description."""
                 idx = self.summary_count + self.failed_count + 1
                 vision_q = self.vision_queue.qsize()
 
-            if show_live:
-                img_info = f" | 📷 {len(work_item.image_descriptions)}" if work_item.image_descriptions else ""
-                print(f"\n[{idx}/{total}] 📋 [SUMMARY] Ticket {work_item.ticket_id}{img_info} [VQ: {vision_q}]")
+            img_info = f" | 📷 {len(work_item.image_descriptions)}" if work_item.image_descriptions else ""
+            print(f"\n[{idx}/{total}] 📋 [SUMMARY] Ticket {work_item.ticket_id}{img_info} [VQ: {vision_q}]")
 
             try:
                 # Summarize with gpt-oss:120b (GPU)
+                print(f"    [SUMMARY THREAD] Calling summarizer for ticket {work_item.ticket_id}...")
                 summary, metrics = self.summarizer.summarize_full_ticket(
                     ticket=work_item.ticket,
                     is_last=(idx == total),
                     show_live=show_live,
                 )
+                print(f"    [SUMMARY THREAD] Got summary for ticket {work_item.ticket_id}, length={len(summary)}")
 
                 # Store to DB
                 if not dry_run and db_collection:
+                    print(f"    [SUMMARY THREAD] Saving to DB...")
                     update_doc = {
                         "_key": str(work_item.ticket_id),
                         "summary": summary,
@@ -333,10 +358,14 @@ Keep description concise (2-4 sentences). Output ONLY the description."""
                 with self._lock:
                     self.summary_count += 1
 
+                print(f"    [SUMMARY THREAD] Putting result in result_queue...")
                 self.result_queue.put(("success", work_item.ticket_id, summary))
+                print(f"    [SUMMARY THREAD] Done with ticket {work_item.ticket_id}")
 
             except Exception as e:
-                print(f"  ⚠️ Summary error: {e}")
+                print(f"  ⚠️ [SUMMARY THREAD] Error: {e}")
+                import traceback
+                traceback.print_exc()
                 with self._lock:
                     self.failed_count += 1
                 self.result_queue.put(("failed", work_item.ticket_id, str(e)))
@@ -395,39 +424,54 @@ Keep description concise (2-4 sentences). Output ONLY the description."""
         print(f"   ✅ Starting async fetch loop...")
 
         async def fetch_all():
-            for ticket_id in ticket_ids:
+            print(f"    [FETCH] Starting to fetch {len(ticket_ids)} tickets...")
+            for i, ticket_id in enumerate(ticket_ids):
+                print(f"    [FETCH] Fetching ticket {ticket_id} ({i+1}/{len(ticket_ids)})...")
                 ticket = await fetch_ticket_full_context(mcp_client, ticket_id)
                 if ticket:
+                    print(f"    [FETCH] Got ticket {ticket_id}, putting in fetch_queue...")
                     self.fetch_queue.put((ticket_id, ticket))
+                    print(f"    [FETCH] Ticket {ticket_id} in queue, queue size={self.fetch_queue.qsize()}")
                 else:
+                    print(f"    [FETCH] Failed to fetch ticket {ticket_id}")
                     self.fetch_queue.put((ticket_id, None))
                 with self._lock:
                     self.fetch_count += 1
             # Signal end
+            print(f"    [FETCH] All tickets fetched, sending STOP_SIGNAL...")
             self.fetch_queue.put(STOP_SIGNAL)
+            print(f"    [FETCH] Done!")
 
         # Run fetch in background
+        print(f"    [MAIN] Creating fetch task...")
         fetch_task = asyncio.create_task(fetch_all())
+        print(f"    [MAIN] Fetch task created, starting result monitoring loop...")
 
         # Monitor progress and collect results
         results = []
+        loop_count = 0
         while True:
+            loop_count += 1
             try:
-                result = self.result_queue.get(timeout=1.0)
+                print(f"    [MAIN] Waiting for result (loop {loop_count})...")
+                result = self.result_queue.get(timeout=5.0)
+                print(f"    [MAIN] Got result from result_queue: {type(result)}")
             except queue.Empty:
                 # Print progress
                 with self._lock:
                     elapsed = time.time() - start_time
                     rate = self.summary_count / elapsed * 3600 if elapsed > 0 else 0
-                    print(f"\r   📊 Fetch: {self.fetch_count}/{total} | "
+                    print(f"\n   📊 Fetch: {self.fetch_count}/{total} | "
                           f"Vision: {self.vision_count} | "
                           f"Summary: {self.summary_count} | "
                           f"Rate: {rate:.0f}/hr | "
                           f"FQ: {self.fetch_queue.qsize()} | "
-                          f"VQ: {self.vision_queue.qsize()}", end="", flush=True)
+                          f"VQ: {self.vision_queue.qsize()}")
+                    print(f"    [MAIN] Vision thread alive: {vision_thread.is_alive()}, Summary thread alive: {summary_thread.is_alive()}")
                 continue
 
             if result is STOP_SIGNAL:
+                print(f"    [MAIN] Got STOP_SIGNAL, breaking...")
                 break
 
             results.append(result)
