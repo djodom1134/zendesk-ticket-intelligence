@@ -10,6 +10,7 @@ Features:
 """
 
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -18,6 +19,10 @@ import httpx
 import structlog
 
 logger = structlog.get_logger()
+
+# Environment-based defaults
+DEFAULT_OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
+DEFAULT_SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "nemotron-3-nano:latest")
 
 
 @dataclass
@@ -251,14 +256,19 @@ class TicketSummarizer:
 
     def __init__(
         self,
-        ollama_url: str = "http://ollama:11434",
-        model: str = "gpt-oss:120b",
+        ollama_url: str = None,
+        model: str = None,
         timeout: float = 600.0,
         max_input_chars: int = 100000,
         max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         keep_alive: str = "30m",
         stream: bool = True,  # Enable streaming by default
     ):
+        # Use environment defaults if not specified
+        if ollama_url is None:
+            ollama_url = DEFAULT_OLLAMA_URL
+        if model is None:
+            model = DEFAULT_SUMMARY_MODEL
         self.ollama_url = ollama_url.rstrip("/")
         self.model = model
         self.timeout = timeout
