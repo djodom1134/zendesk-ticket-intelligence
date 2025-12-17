@@ -622,12 +622,12 @@ async def search_tickets(request: SearchRequest):
                 must=[FieldCondition(key="cluster_id", match=MatchValue(value=request.cluster_id))]
             )
 
-        results = qdrant.search(
+        results = qdrant.query_points(
             collection_name=QDRANT_COLLECTION,
-            query_vector=query_embedding,
+            query=query_embedding,
             query_filter=search_filter,
             limit=request.limit,
-        )
+        ).points
 
         tickets = [
             TicketSummary(
@@ -716,11 +716,11 @@ async def tier0_chat(request: ChatRequest):
 
         # Step 2: Search for similar tickets
         qdrant = get_qdrant()
-        similar_tickets = qdrant.search(
+        similar_tickets = qdrant.query_points(
             collection_name=QDRANT_COLLECTION,
-            query_vector=query_embedding,
+            query=query_embedding,
             limit=5,
-        )
+        ).points
 
         tickets_context = ""
         for hit in similar_tickets:
@@ -839,11 +839,11 @@ async def assign_cluster(request: AssignClusterRequest):
 
         # Find similar tickets
         qdrant = get_qdrant()
-        results = qdrant.search(
+        results = qdrant.query_points(
             collection_name=QDRANT_COLLECTION,
-            query_vector=embedding,
+            query=embedding,
             limit=10,
-        )
+        ).points
 
         if not results:
             return AssignClusterResponse(
