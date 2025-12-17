@@ -6,7 +6,7 @@ import { ClusterDetails } from "@/components/cluster-details";
 import { ClusterGraph } from "@/components/cluster-graph";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LayoutGrid, TrendingUp, FileText, Network } from "lucide-react";
-import { Cluster } from "@/lib/types";
+import { Cluster, ClusterAPIResponse, transformCluster } from "@/lib/types";
 
 // Mock data - will be replaced with API calls
 const mockClusters = [
@@ -71,14 +71,15 @@ export default function Home() {
         const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
         const response = await fetch(`${apiUrl}/api/clusters`);
         if (response.ok) {
-          const data = await response.json();
+          const data: ClusterAPIResponse[] = await response.json();
           // API returns array directly, not wrapped in {clusters: [...]}
           if (Array.isArray(data) && data.length > 0) {
-            setClusters(data);
+            const transformedClusters = data.map(transformCluster);
+            setClusters(transformedClusters);
             setStats({
-              totalClusters: data.length,
-              totalTickets: data.reduce((sum: number, c: any) => sum + c.size, 0),
-              avgConfidence: Math.round(data.reduce((sum: number, c: any) => sum + (c.confidence || 0), 0) / data.length * 100),
+              totalClusters: transformedClusters.length,
+              totalTickets: transformedClusters.reduce((sum: number, c: Cluster) => sum + c.size, 0),
+              avgConfidence: Math.round(transformedClusters.reduce((sum: number, c: Cluster) => sum + c.confidence, 0) / transformedClusters.length * 100),
             });
           }
         }

@@ -19,6 +19,15 @@ export function ClustersTable({ clusters, onSelectCluster }: ClustersTableProps)
   const [sortBy, setSortBy] = useState<"size" | "confidence" | "createdAt">("size");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
+  // Safety check for clusters
+  if (!Array.isArray(clusters) || clusters.length === 0) {
+    return (
+      <div className="nvidia-build-card p-12 text-center text-muted-foreground">
+        No clusters available
+      </div>
+    );
+  }
+
   const sortedClusters = [...clusters].sort((a, b) => {
     const order = sortOrder === "asc" ? 1 : -1;
     if (sortBy === "size") return (a.size - b.size) * order;
