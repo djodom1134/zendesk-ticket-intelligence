@@ -110,14 +110,18 @@ async def compute_cluster_positions(cluster_ids: List[str]) -> List[List[float]]
             vectors = []
             for ticket_id in rep_tickets[:5]:  # Use up to 5 representative tickets
                 try:
-                    point = qdrant.retrieve(
+                    points = qdrant.retrieve(
                         collection_name=QDRANT_COLLECTION,
-                        ids=[int(ticket_id)]
+                        ids=[int(ticket_id)],
+                        with_vectors=True
                     )
-                    if point and len(point) > 0:
-                        vectors.append(point[0].vector)
+                    if points and len(points) > 0:
+                        # Access vector from the Record object
+                        vector = points[0].vector
+                        if vector is not None:
+                            vectors.append(vector)
                 except Exception as e:
-                    logger.debug(f"Failed to get vector for ticket {ticket_id}: {e}")
+                    logger.warning(f"Failed to get vector for ticket {ticket_id}: {e}")
                     continue
 
             if vectors:
