@@ -79,10 +79,35 @@ async def embed_text(text: str) -> List[float]:
         return response.json()["embeddings"][0]
 
 
-async def compute_cluster_positions(cluster_ids: List[str]) -> List[List[float]]:
+async def compute_cluster_positions(
+    cluster_ids: List[str],
+    x_dim: int = 0,
+    y_dim: int = 1,
+    n_components: int = 10
+) -> List[List[float]]:
     """
-    Compute 2D UMAP positions for clusters based on their centroids.
-    Returns list of [x, y] coordinates.
+    Compute cluster positions for visualization using UMAP dimensionality reduction.
+
+    Args:
+        cluster_ids: List of cluster IDs to compute positions for
+        x_dim: Which UMAP component to use for x-axis (0-9, default 0)
+        y_dim: Which UMAP component to use for y-axis (0-9, default 1)
+        n_components: Number of UMAP components to compute (default 10)
+
+    Returns:
+        List of [x, y] coordinates normalized to 0-100 range
+
+    How it works:
+        1. Fetch representative ticket embeddings (4096-dim) from Qdrant
+        2. Compute cluster centroids (mean of representative tickets)
+        3. Apply UMAP to reduce from 4096-dim to n_components-dim (default 10)
+        4. Select x_dim and y_dim components for visualization
+        5. Normalize to 0-100 range for consistent graph scaling
+
+    The x and y axes represent:
+        - UMAP Component N: A learned combination of all 4096 embedding dimensions
+        - Preserves semantic similarity (similar clusters appear close together)
+        - Each component captures different aspects of cluster relationships
     """
     try:
         import numpy as np
@@ -106,7 +131,7 @@ async def compute_cluster_positions(cluster_ids: List[str]) -> List[List[float]]
             if not rep_tickets:
                 continue
 
-            # Fetch embeddings from Qdrant
+            # Fetch embeddings from Qdrant (4096-dimensional vectors)
             vectors = []
             for ticket_id in rep_tickets[:5]:  # Use up to 5 representative tickets
                 try:
@@ -125,7 +150,7 @@ async def compute_cluster_positions(cluster_ids: List[str]) -> List[List[float]]
                     continue
 
             if vectors:
-                # Compute centroid
+                # Compute centroid (mean of 4096-dim vectors)
                 centroid = np.mean(vectors, axis=0)
                 centroids.append(centroid)
                 cluster_to_index[idx] = len(centroids) - 1
@@ -138,18 +163,26 @@ async def compute_cluster_positions(cluster_ids: List[str]) -> List[List[float]]
             cols = math.ceil(math.sqrt(n))
             return [[float(i % cols * 10), float(i // cols * 10)] for i in range(n)]
 
-        # Apply UMAP to reduce to 2D
+        # Apply UMAP to reduce from 4096-dim to n_components-dim
         centroids_array = np.array(centroids)
         umap_model = umap.UMAP(
-            n_components=2,
+            n_components=min(n_components, len(centroids) - 1),  # Can't have more components than samples
             n_neighbors=min(15, len(centroids) - 1),
             min_dist=0.1,
             metric='cosine',
             random_state=42
         )
-        positions_2d = umap_model.fit_transform(centroids_array)
+        positions_nd = umap_model.fit_transform(centroids_array)
 
-        # Normalize to reasonable range for visualization
+        # Validate dimension selection
+        actual_components = positions_nd.shape[1]
+        x_dim = min(x_dim, actual_components - 1)
+        y_dim = min(y_dim, actual_components - 1)
+
+        # Extract selected dimensions
+        positions_2d = positions_nd[:, [x_dim, y_dim]]
+
+        # Normalize to 0-100 range for visualization
         pos_min = positions_2d.min(axis=0)
         pos_max = positions_2d.max(axis=0)
         pos_range = pos_max - pos_min
@@ -168,6 +201,7 @@ async def compute_cluster_positions(cluster_ids: List[str]) -> List[List[float]]
                 # Cluster had no valid vectors - place at origin
                 result.append([0.0, 0.0])
 
+        logger.info(f"Computed positions using UMAP components {x_dim} and {y_dim} (of {actual_components} total)")
         return result
 
     except Exception as e:
@@ -553,9 +587,25 @@ async def list_clusters(
     offset: int = Query(0, ge=0),
     sort_by: str = Query("size", regex="^(size|confidence|created_at)$"),
     sort_order: str = Query("desc", regex="^(asc|desc)$"),
-    include_positions: bool = Query(False, description="Include 2D UMAP positions")
+    include_positions: bool = Query(False, description="Include 2D UMAP positions"),
+    x_dim: int = Query(0, ge=0, le=9, description="UMAP component for x-axis (0-9)"),
+    y_dim: int = Query(1, ge=0, le=9, description="UMAP component for y-axis (0-9)")
 ):
-    """List all clusters with pagination and sorting."""
+    """
+    List all clusters with pagination and sorting.
+
+    Dimension Selection:
+        - x_dim, y_dim: Select which UMAP components to plot (0-9)
+        - Component 0: Primary semantic dimension (most variance)
+        - Component 1: Secondary semantic dimension
+        - Components 2-9: Additional semantic dimensions
+        - Each component captures different aspects of cluster relationships
+
+    Examples:
+        - x_dim=0, y_dim=1: Default view (most common)
+        - x_dim=0, y_dim=2: Alternative perspective
+        - x_dim=2, y_dim=3: Explore tertiary relationships
+    """
     try:
         db = get_db()
         cursor = db.aql.execute(
@@ -589,7 +639,11 @@ async def list_clusters(
 
         # Add 2D positions if requested
         if include_positions and clusters:
-            positions = await compute_cluster_positions([c.id for c in clusters])
+            positions = await compute_cluster_positions(
+                [c.id for c in clusters],
+                x_dim=x_dim,
+                y_dim=y_dim
+            )
             for cluster, pos in zip(clusters, positions):
                 cluster.x = pos[0]
                 cluster.y = pos[1]
