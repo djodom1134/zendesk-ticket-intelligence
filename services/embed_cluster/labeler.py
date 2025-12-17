@@ -52,11 +52,13 @@ class ClusterLabeler:
         self,
         ollama_url: str = "http://localhost:11434",
         model: str = "llama3.2:3b",
-        timeout: float = 120.0,
+        timeout: float = 300.0,  # 5 minutes for large models
+        max_retries: int = 3,
     ):
         self.ollama_url = ollama_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        self.max_retries = max_retries
 
     def summarize_cluster(
         self,
@@ -108,21 +110,46 @@ class ClusterLabeler:
             return self._empty_summary(cluster_id)
 
     def _call_ollama(self, prompt: str) -> str:
-        """Call Ollama API for completion"""
-        response = httpx.post(
-            f"{self.ollama_url}/api/generate",
-            json={
-                "model": self.model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"temperature": 0.3},
-            },
-            headers={"Content-Type": "application/json"},
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result.get("response", "")
+        """Call Ollama API for completion with retry logic"""
+        import time
+
+        last_error = None
+        for attempt in range(self.max_retries):
+            try:
+                logger.info("Calling Ollama", model=self.model, attempt=attempt+1)
+                response = httpx.post(
+                    f"{self.ollama_url}/api/generate",
+                    json={
+                        "model": self.model,
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {
+                            "temperature": 0.3,
+                            "num_ctx": 8192,  # Larger context for 120b model
+                        },
+                    },
+                    headers={"Content-Type": "application/json"},
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                result = response.json()
+                return result.get("response", "")
+            except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
+                last_error = e
+                logger.warning(
+                    "Ollama call failed, retrying",
+                    attempt=attempt+1,
+                    max_retries=self.max_retries,
+                    error=str(e)
+                )
+                if attempt < self.max_retries - 1:
+                    # Wait before retry, exponential backoff
+                    wait_time = 5 * (2 ** attempt)
+                    logger.info("Waiting before retry", seconds=wait_time)
+                    time.sleep(wait_time)
+
+        # All retries failed
+        raise last_error
 
     def _parse_response(self, response: str) -> dict:
         """Parse JSON from LLM response"""
