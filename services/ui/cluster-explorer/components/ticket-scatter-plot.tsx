@@ -177,7 +177,9 @@ export function TicketScatterPlot({
 function convertTicketsToGraphData(tickets: TicketPosition[]) {
   // Create a color map for clusters
   const clusterColors = new Map<string, string>()
-  const colorPalette = [
+
+  // Base color palette (10 distinct colors)
+  const baseColors = [
     '#76b900', // NVIDIA green
     '#00a8e0', // Blue
     '#9370db', // Purple
@@ -190,10 +192,44 @@ function convertTicketsToGraphData(tickets: TicketPosition[]) {
     '#fdcb6e', // Orange
   ]
 
+  // Generate 63 colors by interpolating between base colors
+  const generateColorGradient = (numColors: number): string[] => {
+    const colors: string[] = []
+    const segmentSize = numColors / baseColors.length
+
+    for (let i = 0; i < numColors; i++) {
+      const segmentIndex = Math.floor(i / segmentSize)
+      const nextSegmentIndex = (segmentIndex + 1) % baseColors.length
+      const t = (i % segmentSize) / segmentSize
+
+      const color1 = baseColors[segmentIndex]
+      const color2 = baseColors[nextSegmentIndex]
+
+      // Interpolate between color1 and color2
+      const r1 = parseInt(color1.slice(1, 3), 16)
+      const g1 = parseInt(color1.slice(3, 5), 16)
+      const b1 = parseInt(color1.slice(5, 7), 16)
+
+      const r2 = parseInt(color2.slice(1, 3), 16)
+      const g2 = parseInt(color2.slice(3, 5), 16)
+      const b2 = parseInt(color2.slice(5, 7), 16)
+
+      const r = Math.round(r1 + (r2 - r1) * t)
+      const g = Math.round(g1 + (g2 - g1) * t)
+      const b = Math.round(b1 + (b2 - b1) * t)
+
+      colors.push(`#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`)
+    }
+
+    return colors
+  }
+
   // Assign colors to clusters
   const uniqueClusters = [...new Set(tickets.map(t => t.cluster_id).filter(Boolean))]
+  const colorGradient = generateColorGradient(Math.max(uniqueClusters.length, 63))
+
   uniqueClusters.forEach((clusterId, idx) => {
-    clusterColors.set(clusterId!, colorPalette[idx % colorPalette.length])
+    clusterColors.set(clusterId!, colorGradient[idx])
   })
 
   // Convert tickets to nodes
