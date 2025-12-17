@@ -155,9 +155,10 @@ def main():
         rep_texts = [ticket_map.get(tid, "") for tid in cluster.representative_ids[:5]]
 
         # Generate label
-        summary = labeler.label_cluster(
-            cluster_id=str(cluster.cluster_id),
-            ticket_texts=rep_texts,
+        summary = labeler.summarize_cluster(
+            cluster_id=cluster.cluster_id,
+            representative_texts=rep_texts,
+            keywords=cluster.keywords,
         )
 
         labeled_clusters.append({
@@ -184,11 +185,10 @@ def main():
             "keywords": cluster.keywords,
             "issue_description": summary.issue_description,
             "environment": summary.environment,
-            "symptoms": summary.symptoms,
+            "common_symptoms": summary.common_symptoms,
             "recommended_response": summary.recommended_response,
             "deflection_path": summary.deflection_path,
             "representative_tickets": cluster.representative_ids,
-            "priority": summary.priority,
             "confidence": summary.confidence,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
