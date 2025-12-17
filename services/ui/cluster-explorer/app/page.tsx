@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { ClustersTable } from "@/components/clusters-table";
 import { ClusterDetails } from "@/components/cluster-details";
-import { ClusterGraph } from "@/components/cluster-graph";
+import { ClusterForceGraph } from "@/components/cluster-force-graph";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LayoutGrid, TrendingUp, FileText, Network } from "lucide-react";
 import { Cluster, ClusterAPIResponse, transformCluster } from "@/lib/types";
@@ -69,7 +69,7 @@ export default function Home() {
     const fetchClusters = async () => {
       try {
         const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-        const response = await fetch(`${apiUrl}/api/clusters`);
+        const response = await fetch(`${apiUrl}/api/clusters?limit=100`);
         if (response.ok) {
           const data: ClusterAPIResponse[] = await response.json();
           // API returns array directly, not wrapped in {clusters: [...]}
@@ -137,23 +137,26 @@ export default function Home() {
           </TabsContent>
 
           <TabsContent value="graph">
-            <div className="nvidia-build-card p-6">
-              <h2 className="text-xl font-bold mb-4">Cluster Network Visualization</h2>
+            <div className="nvidia-build-card p-6 h-[800px]">
+              <h2 className="text-xl font-bold mb-4">3D Cluster Network Visualization</h2>
               {Array.isArray(clusters) && clusters.length > 0 ? (
-                <ClusterGraph
-                  clusters={clusters.map(c => ({
-                    cluster_id: c.id,
-                    label: c.label,
-                    size: c.size,
-                  }))}
-                  onClusterClick={(clusterId) => {
-                    const cluster = clusters.find(c => c.id === clusterId);
-                    if (cluster) {
-                      setSelectedCluster(cluster);
-                      setActiveTab("details");
-                    }
-                  }}
-                />
+                <div className="h-[calc(100%-3rem)]">
+                  <ClusterForceGraph
+                    clusters={clusters.map(c => ({
+                      id: c.id,
+                      label: c.label,
+                      size: c.size,
+                      group: c.priority,
+                    }))}
+                    onClusterClick={(clusterId) => {
+                      const cluster = clusters.find(c => c.id === clusterId);
+                      if (cluster) {
+                        setSelectedCluster(cluster);
+                        setActiveTab("details");
+                      }
+                    }}
+                  />
+                </div>
               ) : (
                 <div className="text-center py-12 text-muted-foreground">
                   {loading ? "Loading clusters..." : "No clusters available"}
