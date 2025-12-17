@@ -3,12 +3,12 @@
 import { useState, useEffect } from "react";
 import { ClustersTable } from "@/components/clusters-table";
 import { ClusterDetails } from "@/components/cluster-details";
-import { EnhancedGraphVisualization } from "@/components/enhanced-graph-visualization";
+import { GraphVisualization } from "@/components/graph-visualization";
 import { ClusterSearch } from "@/components/cluster-search";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LayoutGrid, TrendingUp, FileText, Network, Search } from "lucide-react";
 import { Cluster, ClusterAPIResponse, transformCluster } from "@/lib/types";
-import { clustersToGraphData } from "@/lib/cluster-to-graph";
+import { clustersToTriples } from "@/lib/cluster-to-graph";
 
 // Mock data - will be replaced with API calls
 const mockClusters = [
@@ -147,10 +147,11 @@ export default function Home() {
           <TabsContent value="graph">
             {Array.isArray(clusters) && clusters.length > 0 ? (
               <div className="h-[800px]">
-                <EnhancedGraphVisualization
-                  graphData={clustersToGraphData(clusters)}
+                <GraphVisualization
+                  triples={clustersToTriples(clusters)}
                   fullscreen={false}
-                  onError={(error) => console.error("Graph error:", error)}
+                  initialMode="2d"
+                  layoutType="force"
                 />
               </div>
             ) : (
