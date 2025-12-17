@@ -806,7 +806,7 @@ async def get_ticket_positions(
 async def enrich_cluster(cluster_id: str):
     """
     Enrich cluster data with LLM-generated content for missing fields.
-    Generates symptoms list, improves descriptions, and adds insights.
+    Generates symptoms, environment details, and recommended responses.
     """
     try:
         db = get_db()
@@ -823,7 +823,10 @@ Environment: {cluster.get('environment', 'N/A')}
 Keywords: {', '.join(cluster.get('keywords', []))}
 Recommended Response: {cluster.get('recommended_response', 'N/A')}
 Number of Tickets: {cluster.get('size', 0)}
+Representative Tickets: {', '.join(cluster.get('representative_tickets', [])[:3])}
 """
+
+        updates = {}
 
         # Generate symptoms if missing
         symptoms = cluster.get('symptoms')
@@ -855,18 +858,80 @@ Return ONLY a JSON array of symptom strings, like: ["symptom 1", "symptom 2", "s
                     json_end = llm_response.rfind("]") + 1
                     if json_start >= 0 and json_end > json_start:
                         symptoms = json.loads(llm_response[json_start:json_end])
+                        updates["symptoms"] = symptoms
                     else:
                         symptoms = []
                 except json.JSONDecodeError:
                     symptoms = []
 
-                # Update cluster in database
-                db.collection("clusters").update({
-                    "_key": cluster_id,
-                    "symptoms": symptoms
-                })
+        # Generate environment if missing or too short
+        environment = cluster.get('environment')
+        if not environment or len(environment) < 20:
+            prompt = f"""Based on this support ticket cluster information, describe the typical environment or system configuration where this issue occurs. Include software versions, operating systems, hardware, and relevant technical details.
 
-        return {"status": "enriched", "symptoms": symptoms}
+{context}
+
+Return ONLY a single paragraph describing the environment (2-3 sentences).
+"""
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{OLLAMA_URL}/api/generate",
+                    json={
+                        "model": CHAT_MODEL,
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {"temperature": 0.3},
+                    },
+                )
+                response.raise_for_status()
+                environment = response.json().get("response", "").strip()
+                if environment:
+                    updates["environment"] = environment
+
+        # Generate recommended response if missing or too short
+        recommended_response = cluster.get('recommended_response')
+        if not recommended_response or len(recommended_response) < 30:
+            prompt = f"""Based on this support ticket cluster information, write a professional recommended response for support agents to use when addressing this issue. Include:
+1. What to ask the customer for (logs, screenshots, configuration details)
+2. What to check or verify
+3. Recommended troubleshooting steps
+4. When to escalate
+
+{context}
+
+Return ONLY the recommended response text (2-4 sentences).
+"""
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{OLLAMA_URL}/api/generate",
+                    json={
+                        "model": CHAT_MODEL,
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {"temperature": 0.3},
+                    },
+                )
+                response.raise_for_status()
+                recommended_response = response.json().get("response", "").strip()
+                if recommended_response:
+                    updates["recommended_response"] = recommended_response
+
+        # Update cluster in database if we have any updates
+        if updates:
+            db.collection("clusters").update({
+                "_key": cluster_id,
+                **updates
+            })
+
+        return {
+            "status": "enriched",
+            "symptoms": symptoms or cluster.get('symptoms', []),
+            "environment": environment or cluster.get('environment', ''),
+            "recommended_response": recommended_response or cluster.get('recommended_response', ''),
+            "fields_updated": list(updates.keys())
+        }
 
     except Exception as e:
         logger.error(f"Failed to enrich cluster {cluster_id}", error=str(e))

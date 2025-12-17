@@ -13,10 +13,13 @@ export function ClusterDetails({ cluster, onBack }: ClusterDetailsProps) {
   const [copied, setCopied] = useState(false);
   const [enriching, setEnriching] = useState(false);
   const [symptoms, setSymptoms] = useState<string[]>([]);
+  const [environment, setEnvironment] = useState(cluster.environment || '');
+  const [recommendedResponse, setRecommendedResponse] = useState(cluster.recommendedResponse || '');
 
   const copyResponse = () => {
-    if (cluster.recommendedResponse) {
-      navigator.clipboard.writeText(cluster.recommendedResponse);
+    const textToCopy = recommendedResponse || cluster.recommendedResponse;
+    if (textToCopy) {
+      navigator.clipboard.writeText(textToCopy);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -32,6 +35,8 @@ export function ClusterDetails({ cluster, onBack }: ClusterDetailsProps) {
       if (response.ok) {
         const data = await response.json();
         setSymptoms(data.symptoms || []);
+        setEnvironment(data.environment || cluster.environment || '');
+        setRecommendedResponse(data.recommended_response || cluster.recommendedResponse || '');
       }
     } catch (error) {
       console.error('Failed to enrich cluster:', error);
@@ -39,6 +44,8 @@ export function ClusterDetails({ cluster, onBack }: ClusterDetailsProps) {
       setEnriching(false);
     }
   };
+
+  const needsEnrichment = !symptoms.length || !environment || environment.length < 20 || !recommendedResponse || recommendedResponse.length < 30;
 
   const getPriorityColor = (priority: string) => {
     const colors = {
@@ -96,12 +103,32 @@ export function ClusterDetails({ cluster, onBack }: ClusterDetailsProps) {
         </div>
       </div>
 
+      {/* Enrich Button */}
+      {needsEnrichment && (
+        <div className="nvidia-build-card">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-semibold mb-1">AI-Powered Enrichment</h3>
+              <p className="text-sm text-muted-foreground">Generate missing details using AI</p>
+            </div>
+            <button
+              onClick={enrichCluster}
+              disabled={enriching}
+              className="flex items-center gap-2 px-4 py-2 bg-[#76b900] hover:bg-[#76b900]/90 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Sparkles className="h-4 w-4" />
+              {enriching ? "Generating..." : "Enrich with AI"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Details Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Environment */}
         <div className="nvidia-build-card">
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Environment</h3>
-          <p className="text-foreground">{cluster.environment}</p>
+          <p className="text-foreground">{environment || cluster.environment || 'No environment data available'}</p>
         </div>
 
         {/* Priority & Date */}
@@ -126,35 +153,27 @@ export function ClusterDetails({ cluster, onBack }: ClusterDetailsProps) {
               <MessageSquare className="h-4 w-4" />
               Recommended Response
             </h3>
-            <button
-              onClick={copyResponse}
-              className="flex items-center gap-1 text-sm text-[#76b900] hover:text-[#76b900]/80 transition-colors"
-            >
-              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              {copied ? "Copied!" : "Copy"}
-            </button>
+            {(recommendedResponse || cluster.recommendedResponse) && (
+              <button
+                onClick={copyResponse}
+                className="flex items-center gap-1 text-sm text-[#76b900] hover:text-[#76b900]/80 transition-colors"
+              >
+                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            )}
           </div>
-          <p className="text-foreground bg-muted/30 p-4 rounded-lg">{cluster.recommendedResponse}</p>
+          <p className="text-foreground bg-muted/30 p-4 rounded-lg">
+            {recommendedResponse || cluster.recommendedResponse || 'No recommended response available'}
+          </p>
         </div>
 
         {/* Symptoms */}
         <div className="nvidia-build-card md:col-span-2">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-              <AlertCircle className="h-4 w-4" />
-              Common Symptoms
-            </h3>
-            {symptoms.length === 0 && (
-              <button
-                onClick={enrichCluster}
-                disabled={enriching}
-                className="flex items-center gap-1 text-sm text-[#76b900] hover:text-[#76b900]/80 transition-colors disabled:opacity-50"
-              >
-                <Sparkles className="h-4 w-4" />
-                {enriching ? "Generating..." : "Generate with AI"}
-              </button>
-            )}
-          </div>
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
+            <AlertCircle className="h-4 w-4" />
+            Common Symptoms
+          </h3>
           {symptoms.length > 0 ? (
             <ul className="space-y-2">
               {symptoms.map((symptom, idx) => (
@@ -165,7 +184,7 @@ export function ClusterDetails({ cluster, onBack }: ClusterDetailsProps) {
               ))}
             </ul>
           ) : (
-            <p className="text-muted-foreground italic">No symptoms data available. Click "Generate with AI" to create.</p>
+            <p className="text-muted-foreground italic">No symptoms data available. Use "Enrich with AI" button above to generate.</p>
           )}
         </div>
 
