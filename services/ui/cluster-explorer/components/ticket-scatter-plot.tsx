@@ -6,7 +6,7 @@ import { FallbackGraph } from "./fallback-graph"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Slider } from "@/components/ui/slider"
-import { CuboidIcon as Cube, LayoutGrid, Loader2, Link as LinkIcon } from "lucide-react"
+import { Loader2, Link as LinkIcon } from "lucide-react"
 import type { TicketPosition } from "@/lib/types"
 
 interface TicketScatterPlotProps {
@@ -24,7 +24,6 @@ export function TicketScatterPlot({
   yDim: initialYDim = 1,
   zDim: initialZDim = 2
 }: TicketScatterPlotProps) {
-  const [use3D, setUse3D] = useState(initialMode === '3d')
   const [xDim, setXDim] = useState(initialXDim)
   const [yDim, setYDim] = useState(initialYDim)
   const [zDim, setZDim] = useState(initialZDim)
@@ -44,7 +43,7 @@ export function TicketScatterPlot({
           x_dim: xDim.toString(),
           y_dim: yDim.toString(),
           z_dim: zDim.toString(),
-          use_3d: use3D.toString(),
+          use_3d: 'true', // Always use 3D
           limit: '2000'
         })
 
@@ -61,7 +60,7 @@ export function TicketScatterPlot({
     }
 
     fetchTickets()
-  }, [apiUrl, xDim, yDim, zDim, use3D])
+  }, [apiUrl, xDim, yDim, zDim])
 
   // Convert tickets to graph data format
   const graphData = convertTicketsToGraphData(tickets, showLinks, nodeSize)
@@ -123,25 +122,23 @@ export function TicketScatterPlot({
             </Select>
           </div>
 
-          {/* Z Dimension (only in 3D mode) */}
-          {use3D && (
-            <div className="flex items-center gap-1">
-              <span className="text-xs text-muted-foreground">Z:</span>
-              <Select value={zDim.toString()} onValueChange={(v) => setZDim(parseInt(v))}>
-                <SelectTrigger className="h-7 w-16 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(i => (
-                    <SelectItem key={i} value={i.toString()}>C{i}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
+          {/* Z Dimension */}
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground">Z:</span>
+            <Select value={zDim.toString()} onValueChange={(v) => setZDim(parseInt(v))}>
+              <SelectTrigger className="h-7 w-16 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(i => (
+                  <SelectItem key={i} value={i.toString()}>C{i}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
-          {/* Right side: Links toggle, 2D/3D toggle and ticket count */}
+          {/* Right side: Links toggle and ticket count */}
           <div className="flex items-center gap-2">
             <div className="bg-background/80 backdrop-blur-sm px-3 py-1 rounded-md text-sm">
               {tickets.length} tickets
@@ -154,22 +151,6 @@ export function TicketScatterPlot({
             >
               <LinkIcon className="h-4 w-4 mr-2" />
               Links
-            </Button>
-            <Button
-              size="sm"
-              variant={use3D ? "outline" : "default"}
-              onClick={() => setUse3D(false)}
-            >
-              <LayoutGrid className="h-4 w-4 mr-2" />
-              2D
-            </Button>
-            <Button
-              size="sm"
-              variant={use3D ? "default" : "outline"}
-              onClick={() => setUse3D(true)}
-            >
-              <Cube className="h-4 w-4 mr-2" />
-              3D
             </Button>
           </div>
         </div>
@@ -192,15 +173,27 @@ export function TicketScatterPlot({
       </div>
 
       {/* Graph Display */}
-      <ForceGraphWrapper
-        jsonData={graphData}
-        fullscreen={false}
-        layoutType="force"
-        highlightedNodes={[]}
-        enableClustering={false}
-        enableClusterColors={true}
-        initialMode={use3D ? '3d' : '2d'}
-      />
+      {loading ? (
+        <div className="flex items-center justify-center h-full">
+          <Loader2 className="h-8 w-8 animate-spin text-[#76b900]" />
+          <span className="ml-2">Loading tickets...</span>
+        </div>
+      ) : tickets.length > 0 ? (
+        <ForceGraphWrapper
+          key="ticket-scatter-graph" // Stable key to prevent remounting
+          jsonData={graphData}
+          fullscreen={false}
+          layoutType="force"
+          highlightedNodes={[]}
+          enableClustering={false}
+          enableClusterColors={true}
+          initialMode="3d"
+        />
+      ) : (
+        <div className="flex items-center justify-center h-full text-muted-foreground">
+          No tickets to display
+        </div>
+      )}
     </div>
   )
 }
