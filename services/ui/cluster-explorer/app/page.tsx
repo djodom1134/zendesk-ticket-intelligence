@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { ClustersTable } from "@/components/clusters-table";
 import { ClusterDetails } from "@/components/cluster-details";
-import { GraphVisualization } from "@/components/graph-visualization";
+import { ClusterGraphView } from "@/components/cluster-graph-view";
 import { ClusterSearch } from "@/components/cluster-search";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LayoutGrid, TrendingUp, FileText, Network, Search } from "lucide-react";
@@ -147,7 +147,7 @@ export default function Home() {
           <TabsContent value="graph">
             {Array.isArray(clusters) && clusters.length > 0 ? (
               <div className="h-[800px]">
-                <GraphVisualization
+                <ClusterGraphView
                   triples={clustersToTriples(clusters)}
                   fullscreen={false}
                   initialMode="2d"
