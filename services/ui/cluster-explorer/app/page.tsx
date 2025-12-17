@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ClustersTable } from "@/components/clusters-table";
 import { ClusterDetails } from "@/components/cluster-details";
+import { ClusterGraph } from "@/components/cluster-graph";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { LayoutGrid, TrendingUp, FileText } from "lucide-react";
+import { LayoutGrid, TrendingUp, FileText, Network } from "lucide-react";
 import { Cluster } from "@/lib/types";
 
 // Mock data - will be replaced with API calls
@@ -59,16 +60,46 @@ const mockClusters = [
 export default function Home() {
   const [selectedCluster, setSelectedCluster] = useState<Cluster | null>(null);
   const [activeTab, setActiveTab] = useState("clusters");
+  const [clusters, setClusters] = useState<Cluster[]>(mockClusters);
+  const [stats, setStats] = useState({ totalClusters: 0, totalTickets: 0, avgConfidence: 0 });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // Fetch clusters from API
+    const fetchClusters = async () => {
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const response = await fetch(`${apiUrl}/clusters`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.clusters && data.clusters.length > 0) {
+            setClusters(data.clusters);
+            setStats({
+              totalClusters: data.clusters.length,
+              totalTickets: data.clusters.reduce((sum: number, c: any) => sum + c.size, 0),
+              avgConfidence: Math.round(data.clusters.reduce((sum: number, c: any) => sum + (c.confidence || 0), 0) / data.clusters.length * 100),
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch clusters:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchClusters();
+  }, []);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
       <main className="container mx-auto px-6 py-8">
         {/* Stats Overview */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-          <StatCard title="Total Clusters" value="24" icon={<LayoutGrid className="h-5 w-5" />} />
-          <StatCard title="Active Tickets" value="1,247" icon={<FileText className="h-5 w-5" />} />
-          <StatCard title="Trending Up" value="8" icon={<TrendingUp className="h-5 w-5" />} trend="+23%" />
-          <StatCard title="Avg Confidence" value="84%" icon={<LayoutGrid className="h-5 w-5" />} />
+          <StatCard title="Total Clusters" value={stats.totalClusters.toString()} icon={<LayoutGrid className="h-5 w-5" />} />
+          <StatCard title="Active Tickets" value={stats.totalTickets.toLocaleString()} icon={<FileText className="h-5 w-5" />} />
+          <StatCard title="Avg Confidence" value={`${stats.avgConfidence}%`} icon={<TrendingUp className="h-5 w-5" />} />
+          <StatCard title="Status" value={loading ? "Loading..." : "Ready"} icon={<Network className="h-5 w-5" />} />
         </div>
 
         <Tabs defaultValue="clusters" className="w-full" onValueChange={setActiveTab}>
@@ -77,7 +108,13 @@ export default function Home() {
               <div className="nvidia-build-tab-icon">
                 <LayoutGrid className="h-3 w-3 text-[#76b900]" />
               </div>
-              <span>Cluster Overview</span>
+              <span>Cluster Table</span>
+            </TabsTrigger>
+            <TabsTrigger value="graph" className="nvidia-build-tab">
+              <div className="nvidia-build-tab-icon">
+                <Network className="h-3 w-3 text-[#76b900]" />
+              </div>
+              <span>Cluster Graph</span>
             </TabsTrigger>
             <TabsTrigger value="details" className="nvidia-build-tab" disabled={!selectedCluster}>
               <div className="nvidia-build-tab-icon">
@@ -89,12 +126,32 @@ export default function Home() {
 
           <TabsContent value="clusters">
             <ClustersTable
-              clusters={mockClusters}
+              clusters={clusters}
               onSelectCluster={(cluster) => {
                 setSelectedCluster(cluster);
                 setActiveTab("details");
               }}
             />
+          </TabsContent>
+
+          <TabsContent value="graph">
+            <div className="nvidia-build-card p-6">
+              <h2 className="text-xl font-bold mb-4">Cluster Network Visualization</h2>
+              <ClusterGraph
+                clusters={clusters.map(c => ({
+                  cluster_id: c.id,
+                  label: c.label,
+                  size: c.size,
+                }))}
+                onClusterClick={(clusterId) => {
+                  const cluster = clusters.find(c => c.id === clusterId);
+                  if (cluster) {
+                    setSelectedCluster(cluster);
+                    setActiveTab("details");
+                  }
+                }}
+              />
+            </div>
           </TabsContent>
 
           <TabsContent value="details">
