@@ -79,6 +79,86 @@ async def embed_text(text: str) -> List[float]:
         return response.json()["embeddings"][0]
 
 
+async def compute_cluster_positions(cluster_ids: List[str]) -> List[List[float]]:
+    """
+    Compute 2D UMAP positions for clusters based on their centroids.
+    Returns list of [x, y] coordinates.
+    """
+    try:
+        import numpy as np
+        import umap
+
+        db = get_db()
+        qdrant = get_qdrant()
+
+        # Get cluster centroids from Qdrant
+        centroids = []
+        valid_ids = []
+
+        for cluster_id in cluster_ids:
+            # Get all tickets in this cluster
+            cluster = db.collection("clusters").get(cluster_id)
+            if not cluster:
+                centroids.append([0.0, 0.0])  # Default position
+                continue
+
+            # Get representative tickets to compute centroid
+            rep_tickets = cluster.get("representative_tickets", [])
+            if not rep_tickets:
+                centroids.append([0.0, 0.0])
+                continue
+
+            # Fetch embeddings from Qdrant
+            vectors = []
+            for ticket_id in rep_tickets[:5]:  # Use up to 5 representative tickets
+                try:
+                    point = qdrant.retrieve(
+                        collection_name=QDRANT_COLLECTION,
+                        ids=[int(ticket_id)]
+                    )
+                    if point:
+                        vectors.append(point[0].vector)
+                except:
+                    continue
+
+            if vectors:
+                # Compute centroid
+                centroid = np.mean(vectors, axis=0)
+                centroids.append(centroid)
+                valid_ids.append(cluster_id)
+            else:
+                centroids.append([0.0, 0.0])
+
+        if len(centroids) < 2:
+            # Not enough data for UMAP
+            return [[0.0, 0.0]] * len(cluster_ids)
+
+        # Apply UMAP to reduce to 2D
+        centroids_array = np.array(centroids)
+        umap_model = umap.UMAP(
+            n_components=2,
+            n_neighbors=min(15, len(centroids) - 1),
+            min_dist=0.1,
+            metric='cosine',
+            random_state=42
+        )
+        positions_2d = umap_model.fit_transform(centroids_array)
+
+        # Normalize to reasonable range for visualization
+        positions_2d = (positions_2d - positions_2d.min(axis=0)) / (positions_2d.max(axis=0) - positions_2d.min(axis=0) + 1e-10)
+        positions_2d = positions_2d * 100  # Scale to 0-100 range
+
+        return positions_2d.tolist()
+
+    except Exception as e:
+        logger.error("Failed to compute cluster positions", error=str(e))
+        # Return default positions in a grid
+        import math
+        n = len(cluster_ids)
+        cols = math.ceil(math.sqrt(n))
+        return [[i % cols * 10, i // cols * 10] for i in range(n)]
+
+
 # ============================================================================
 # Pydantic Models
 # ============================================================================
@@ -92,6 +172,8 @@ class ClusterSummary(BaseModel):
     keywords: List[str]
     issue_description: Optional[str] = None
     created_at: Optional[str] = None
+    x: Optional[float] = None  # 2D UMAP x-coordinate
+    y: Optional[float] = None  # 2D UMAP y-coordinate
 
 
 class ClusterDetail(BaseModel):
@@ -450,7 +532,8 @@ async def list_clusters(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     sort_by: str = Query("size", regex="^(size|confidence|created_at)$"),
-    sort_order: str = Query("desc", regex="^(asc|desc)$")
+    sort_order: str = Query("desc", regex="^(asc|desc)$"),
+    include_positions: bool = Query(False, description="Include 2D UMAP positions")
 ):
     """List all clusters with pagination and sorting."""
     try:
@@ -470,7 +553,7 @@ async def list_clusters(
             }
         )
 
-        return [
+        clusters = [
             ClusterSummary(
                 id=c["_key"],
                 label=c.get("label", f"Cluster {c['_key']}"),
@@ -483,6 +566,15 @@ async def list_clusters(
             )
             for c in cursor
         ]
+
+        # Add 2D positions if requested
+        if include_positions and clusters:
+            positions = await compute_cluster_positions([c.id for c in clusters])
+            for cluster, pos in zip(clusters, positions):
+                cluster.x = pos[0]
+                cluster.y = pos[1]
+
+        return clusters
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

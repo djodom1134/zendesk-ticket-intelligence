@@ -9,14 +9,16 @@ import type { Triple } from "@/utils/text-processing"
 
 interface ClusterGraphViewProps {
   triples: Triple[]
+  clusters?: any[]  // Pass cluster data with x,y coordinates
   fullscreen?: boolean
   highlightedNodes?: string[]
   layoutType?: string
   initialMode?: '2d' | '3d'
 }
 
-export function ClusterGraphView({ 
-  triples, 
+export function ClusterGraphView({
+  triples,
+  clusters,
   fullscreen = false,
   highlightedNodes = [],
   layoutType = "force",
@@ -24,8 +26,8 @@ export function ClusterGraphView({
 }: ClusterGraphViewProps) {
   const [use3D, setUse3D] = useState(initialMode === '3d')
 
-  // Convert triples to graph data format
-  const graphData = convertTriplesToGraphData(triples)
+  // Convert triples to graph data format with actual positions
+  const graphData = convertTriplesToGraphData(triples, clusters)
 
   return (
     <div className="relative w-full h-full">
@@ -71,30 +73,42 @@ export function ClusterGraphView({
   )
 }
 
-function convertTriplesToGraphData(triples: Triple[]) {
+function convertTriplesToGraphData(triples: Triple[], clusters?: any[]) {
   const nodesMap = new Map<string, any>()
   const links: any[] = []
+  const clusterMap = new Map(clusters?.map(c => [c.label, c]) || [])
 
   // Extract unique nodes from triples
   triples.forEach(triple => {
     // Add subject node
     if (!nodesMap.has(triple.subject)) {
+      const cluster = clusterMap.get(triple.subject)
       nodesMap.set(triple.subject, {
         id: triple.subject,
         name: triple.subject,
         val: 10, // Default size
-        color: getNodeColor(triple.subject)
+        color: getNodeColor(triple.subject),
+        // Use actual UMAP coordinates if available
+        x: cluster?.x,
+        y: cluster?.y,
+        fx: cluster?.x, // Fix position if coordinates provided
+        fy: cluster?.y
       })
     }
 
     // Add object node if it's not a property value
     if (!triple.predicate.startsWith('has_')) {
       if (!nodesMap.has(triple.object)) {
+        const cluster = clusterMap.get(triple.object)
         nodesMap.set(triple.object, {
           id: triple.object,
           name: triple.object,
           val: 10,
-          color: getNodeColor(triple.object)
+          color: getNodeColor(triple.object),
+          x: cluster?.x,
+          y: cluster?.y,
+          fx: cluster?.x,
+          fy: cluster?.y
         })
       }
 

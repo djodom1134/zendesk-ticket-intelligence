@@ -16,6 +16,8 @@ export interface ClusterAPIResponse {
   recommended_response?: string;
   deflection_path?: string;
   representative_tickets?: string[];
+  x?: number;  // 2D UMAP x-coordinate
+  y?: number;  // 2D UMAP y-coordinate
 }
 
 // UI type with computed fields
@@ -33,6 +35,8 @@ export interface Cluster {
   confidence: number;
   representativeTickets?: string[];
   createdAt: string;
+  x?: number;  // 2D UMAP x-coordinate
+  y?: number;  // 2D UMAP y-coordinate
 }
 
 // Transform API response to UI format
@@ -51,6 +55,8 @@ export function transformCluster(apiCluster: ClusterAPIResponse): Cluster {
     confidence: apiCluster.confidence || 0,
     representativeTickets: apiCluster.representative_tickets,
     createdAt: apiCluster.created_at || new Date().toISOString(),
+    x: apiCluster.x,
+    y: apiCluster.y,
   };
 }
 

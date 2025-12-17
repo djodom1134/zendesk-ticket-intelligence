@@ -67,11 +67,11 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Fetch clusters from API
+    // Fetch clusters from API with 2D positions
     const fetchClusters = async () => {
       try {
         const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-        const response = await fetch(`${apiUrl}/api/clusters?limit=100`);
+        const response = await fetch(`${apiUrl}/api/clusters?limit=100&include_positions=true`);
         if (response.ok) {
           const data: ClusterAPIResponse[] = await response.json();
           // API returns array directly, not wrapped in {clusters: [...]}
@@ -149,6 +149,7 @@ export default function Home() {
               <div className="h-[800px]">
                 <ClusterGraphView
                   triples={clustersToTriples(clusters)}
+                  clusters={clusters}
                   fullscreen={false}
                   initialMode="2d"
                   layoutType="force"
