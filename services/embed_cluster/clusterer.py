@@ -46,23 +46,40 @@ class TicketClusterer:
         self._hdbscan = None
 
     def _init_models(self):
-        """Lazy initialization of UMAP and HDBSCAN"""
+        """Lazy initialization of UMAP and clustering"""
         if self._umap is None:
-            import umap
-            self._umap = umap.UMAP(
-                n_components=self.umap_n_components,
-                n_neighbors=self.umap_n_neighbors,
-                metric=self.metric,
-                random_state=42,
-            )
+            try:
+                import umap
+                self._umap = umap.UMAP(
+                    n_components=self.umap_n_components,
+                    n_neighbors=self.umap_n_neighbors,
+                    metric=self.metric,
+                    random_state=42,
+                )
+            except ImportError:
+                logger.warning("umap-learn not installed, using PCA instead")
+                from sklearn.decomposition import PCA
+                self._umap = PCA(n_components=self.umap_n_components, random_state=42)
+
         if self._hdbscan is None:
-            import hdbscan
-            self._hdbscan = hdbscan.HDBSCAN(
-                min_cluster_size=self.min_cluster_size,
-                min_samples=self.min_samples,
-                metric="euclidean",
-                cluster_selection_method="eom",
-            )
+            try:
+                import hdbscan
+                self._hdbscan = hdbscan.HDBSCAN(
+                    min_cluster_size=self.min_cluster_size,
+                    min_samples=self.min_samples,
+                    metric="euclidean",
+                    cluster_selection_method="eom",
+                )
+            except ImportError:
+                logger.warning("hdbscan not installed, using AgglomerativeClustering instead")
+                from sklearn.cluster import AgglomerativeClustering
+                # Estimate number of clusters based on data size
+                n_clusters = max(5, min(50, int(np.sqrt(1000))))  # Will be set dynamically
+                self._hdbscan = AgglomerativeClustering(
+                    n_clusters=None,
+                    distance_threshold=1.5,
+                    linkage="ward",
+                )
 
     def cluster(
         self,
