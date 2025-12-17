@@ -802,6 +802,77 @@ async def get_ticket_positions(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/clusters/{cluster_id}/enrich")
+async def enrich_cluster(cluster_id: str):
+    """
+    Enrich cluster data with LLM-generated content for missing fields.
+    Generates symptoms list, improves descriptions, and adds insights.
+    """
+    try:
+        db = get_db()
+        cluster = db.collection("clusters").get(cluster_id)
+
+        if not cluster:
+            raise HTTPException(status_code=404, detail="Cluster not found")
+
+        # Build context from existing cluster data
+        context = f"""
+Cluster: {cluster.get('label', 'Unknown')}
+Issue Description: {cluster.get('issue_description', 'N/A')}
+Environment: {cluster.get('environment', 'N/A')}
+Keywords: {', '.join(cluster.get('keywords', []))}
+Recommended Response: {cluster.get('recommended_response', 'N/A')}
+Number of Tickets: {cluster.get('size', 0)}
+"""
+
+        # Generate symptoms if missing
+        symptoms = cluster.get('symptoms')
+        if not symptoms or symptoms is None:
+            prompt = f"""Based on this support ticket cluster information, generate a list of 3-5 specific symptoms or indicators that customers report when experiencing this issue.
+
+{context}
+
+Return ONLY a JSON array of symptom strings, like: ["symptom 1", "symptom 2", "symptom 3"]
+"""
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{OLLAMA_URL}/api/generate",
+                    json={
+                        "model": CHAT_MODEL,
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {"temperature": 0.3},
+                    },
+                )
+                response.raise_for_status()
+                llm_response = response.json().get("response", "")
+
+                # Parse JSON array from response
+                import json
+                try:
+                    json_start = llm_response.find("[")
+                    json_end = llm_response.rfind("]") + 1
+                    if json_start >= 0 and json_end > json_start:
+                        symptoms = json.loads(llm_response[json_start:json_end])
+                    else:
+                        symptoms = []
+                except json.JSONDecodeError:
+                    symptoms = []
+
+                # Update cluster in database
+                db.collection("clusters").update({
+                    "_key": cluster_id,
+                    "symptoms": symptoms
+                })
+
+        return {"status": "enriched", "symptoms": symptoms}
+
+    except Exception as e:
+        logger.error(f"Failed to enrich cluster {cluster_id}", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/clusters/{cluster_id}", response_model=ClusterDetail)
 async def get_cluster(cluster_id: str):
     """Get detailed cluster information."""

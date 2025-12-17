@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Tag, FileText, MessageSquare, ExternalLink, Copy, Check } from "lucide-react";
+import { ArrowLeft, Tag, FileText, MessageSquare, ExternalLink, Copy, Check, Sparkles, AlertCircle } from "lucide-react";
 import { useState } from "react";
 import { Cluster } from "../lib/types";
 
@@ -11,12 +11,32 @@ interface ClusterDetailsProps {
 
 export function ClusterDetails({ cluster, onBack }: ClusterDetailsProps) {
   const [copied, setCopied] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [symptoms, setSymptoms] = useState<string[]>([]);
 
   const copyResponse = () => {
     if (cluster.recommendedResponse) {
       navigator.clipboard.writeText(cluster.recommendedResponse);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const enrichCluster = async () => {
+    setEnriching(true);
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const response = await fetch(`${apiUrl}/api/clusters/${cluster.id}/enrich`, {
+        method: 'POST',
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setSymptoms(data.symptoms || []);
+      }
+    } catch (error) {
+      console.error('Failed to enrich cluster:', error);
+    } finally {
+      setEnriching(false);
     }
   };
 
@@ -115,6 +135,38 @@ export function ClusterDetails({ cluster, onBack }: ClusterDetailsProps) {
             </button>
           </div>
           <p className="text-foreground bg-muted/30 p-4 rounded-lg">{cluster.recommendedResponse}</p>
+        </div>
+
+        {/* Symptoms */}
+        <div className="nvidia-build-card md:col-span-2">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+              <AlertCircle className="h-4 w-4" />
+              Common Symptoms
+            </h3>
+            {symptoms.length === 0 && (
+              <button
+                onClick={enrichCluster}
+                disabled={enriching}
+                className="flex items-center gap-1 text-sm text-[#76b900] hover:text-[#76b900]/80 transition-colors disabled:opacity-50"
+              >
+                <Sparkles className="h-4 w-4" />
+                {enriching ? "Generating..." : "Generate with AI"}
+              </button>
+            )}
+          </div>
+          {symptoms.length > 0 ? (
+            <ul className="space-y-2">
+              {symptoms.map((symptom, idx) => (
+                <li key={idx} className="flex items-start gap-2">
+                  <span className="text-[#76b900] mt-1">•</span>
+                  <span className="text-foreground">{symptom}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-muted-foreground italic">No symptoms data available. Click "Generate with AI" to create.</p>
+          )}
         </div>
 
         {/* Deflection Path */}
