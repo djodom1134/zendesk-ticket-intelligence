@@ -93,19 +93,17 @@ async def compute_cluster_positions(cluster_ids: List[str]) -> List[List[float]]
 
         # Get cluster centroids from Qdrant
         centroids = []
-        valid_ids = []
+        cluster_to_index = {}
 
-        for cluster_id in cluster_ids:
+        for idx, cluster_id in enumerate(cluster_ids):
             # Get all tickets in this cluster
             cluster = db.collection("clusters").get(cluster_id)
             if not cluster:
-                centroids.append([0.0, 0.0])  # Default position
                 continue
 
             # Get representative tickets to compute centroid
             rep_tickets = cluster.get("representative_tickets", [])
             if not rep_tickets:
-                centroids.append([0.0, 0.0])
                 continue
 
             # Fetch embeddings from Qdrant
@@ -116,22 +114,25 @@ async def compute_cluster_positions(cluster_ids: List[str]) -> List[List[float]]
                         collection_name=QDRANT_COLLECTION,
                         ids=[int(ticket_id)]
                     )
-                    if point:
+                    if point and len(point) > 0:
                         vectors.append(point[0].vector)
-                except:
+                except Exception as e:
+                    logger.debug(f"Failed to get vector for ticket {ticket_id}: {e}")
                     continue
 
             if vectors:
                 # Compute centroid
                 centroid = np.mean(vectors, axis=0)
                 centroids.append(centroid)
-                valid_ids.append(cluster_id)
-            else:
-                centroids.append([0.0, 0.0])
+                cluster_to_index[idx] = len(centroids) - 1
 
         if len(centroids) < 2:
-            # Not enough data for UMAP
-            return [[0.0, 0.0]] * len(cluster_ids)
+            # Not enough data for UMAP - return grid layout
+            logger.warning(f"Only {len(centroids)} valid centroids, using grid layout")
+            import math
+            n = len(cluster_ids)
+            cols = math.ceil(math.sqrt(n))
+            return [[float(i % cols * 10), float(i // cols * 10)] for i in range(n)]
 
         # Apply UMAP to reduce to 2D
         centroids_array = np.array(centroids)
@@ -145,10 +146,25 @@ async def compute_cluster_positions(cluster_ids: List[str]) -> List[List[float]]
         positions_2d = umap_model.fit_transform(centroids_array)
 
         # Normalize to reasonable range for visualization
-        positions_2d = (positions_2d - positions_2d.min(axis=0)) / (positions_2d.max(axis=0) - positions_2d.min(axis=0) + 1e-10)
+        pos_min = positions_2d.min(axis=0)
+        pos_max = positions_2d.max(axis=0)
+        pos_range = pos_max - pos_min
+        # Avoid division by zero
+        pos_range = np.where(pos_range == 0, 1.0, pos_range)
+        positions_2d = (positions_2d - pos_min) / pos_range
         positions_2d = positions_2d * 100  # Scale to 0-100 range
 
-        return positions_2d.tolist()
+        # Map back to original cluster order
+        result = []
+        for idx in range(len(cluster_ids)):
+            if idx in cluster_to_index:
+                pos_idx = cluster_to_index[idx]
+                result.append([float(positions_2d[pos_idx][0]), float(positions_2d[pos_idx][1])])
+            else:
+                # Cluster had no valid vectors - place at origin
+                result.append([0.0, 0.0])
+
+        return result
 
     except Exception as e:
         logger.error("Failed to compute cluster positions", error=str(e))
@@ -156,7 +172,7 @@ async def compute_cluster_positions(cluster_ids: List[str]) -> List[List[float]]
         import math
         n = len(cluster_ids)
         cols = math.ceil(math.sqrt(n))
-        return [[i % cols * 10, i // cols * 10] for i in range(n)]
+        return [[float(i % cols * 10), float(i // cols * 10)] for i in range(n)]
 
 
 # ============================================================================
