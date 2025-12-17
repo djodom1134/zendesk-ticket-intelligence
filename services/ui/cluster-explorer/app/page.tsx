@@ -60,7 +60,7 @@ const mockClusters = [
 export default function Home() {
   const [selectedCluster, setSelectedCluster] = useState<Cluster | null>(null);
   const [activeTab, setActiveTab] = useState("clusters");
-  const [clusters, setClusters] = useState<Cluster[]>(mockClusters);
+  const [clusters, setClusters] = useState<Cluster[]>([]);
   const [stats, setStats] = useState({ totalClusters: 0, totalTickets: 0, avgConfidence: 0 });
   const [loading, setLoading] = useState(true);
 
@@ -138,20 +138,26 @@ export default function Home() {
           <TabsContent value="graph">
             <div className="nvidia-build-card p-6">
               <h2 className="text-xl font-bold mb-4">Cluster Network Visualization</h2>
-              <ClusterGraph
-                clusters={clusters.map(c => ({
-                  cluster_id: c.id,
-                  label: c.label,
-                  size: c.size,
-                }))}
-                onClusterClick={(clusterId) => {
-                  const cluster = clusters.find(c => c.id === clusterId);
-                  if (cluster) {
-                    setSelectedCluster(cluster);
-                    setActiveTab("details");
-                  }
-                }}
-              />
+              {Array.isArray(clusters) && clusters.length > 0 ? (
+                <ClusterGraph
+                  clusters={clusters.map(c => ({
+                    cluster_id: c.id,
+                    label: c.label,
+                    size: c.size,
+                  }))}
+                  onClusterClick={(clusterId) => {
+                    const cluster = clusters.find(c => c.id === clusterId);
+                    if (cluster) {
+                      setSelectedCluster(cluster);
+                      setActiveTab("details");
+                    }
+                  }}
+                />
+              ) : (
+                <div className="text-center py-12 text-muted-foreground">
+                  {loading ? "Loading clusters..." : "No clusters available"}
+                </div>
+              )}
             </div>
           </TabsContent>
 
