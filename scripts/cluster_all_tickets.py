@@ -95,8 +95,16 @@ def main():
     print(f"   Found {len(points)} embeddings")
 
     # Extract embeddings and ticket IDs
-    embeddings = np.array([p.vector for p in points])
-    ticket_ids = [str(p.id) for p in points]
+    embeddings = []
+    ticket_ids = []
+    for p in points:
+        if p.vector is not None and len(p.vector) > 0:
+            embeddings.append(p.vector)
+            ticket_ids.append(str(p.id))
+
+    embeddings = np.array(embeddings)
+    print(f"   Embeddings shape: {embeddings.shape}")
+    print(f"   Sample embedding: {embeddings[0][:5] if len(embeddings) > 0 else 'none'}...")
 
     # Fetch ticket summaries for labeling
     print("📋 Fetching ticket summaries...")
