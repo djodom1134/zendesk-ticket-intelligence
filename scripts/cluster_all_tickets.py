@@ -85,10 +85,10 @@ def main():
     start_time = time.time()
 
     # Get all points from Qdrant
-    from qdrant_client.http.models import ScrollRequest
     scroll_result = vector_store._client.scroll(
         collection_name=vector_store.collection,
         limit=10000,  # Fetch all
+        with_vectors=True,  # IMPORTANT: fetch the vectors!
     )
 
     points = scroll_result[0]
