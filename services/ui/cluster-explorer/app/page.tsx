@@ -3,11 +3,12 @@
 import { useState, useEffect } from "react";
 import { ClustersTable } from "@/components/clusters-table";
 import { ClusterDetails } from "@/components/cluster-details";
-import { ClusterForceGraph } from "@/components/cluster-force-graph";
+import { EnhancedGraphVisualization } from "@/components/enhanced-graph-visualization";
 import { ClusterSearch } from "@/components/cluster-search";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LayoutGrid, TrendingUp, FileText, Network, Search } from "lucide-react";
 import { Cluster, ClusterAPIResponse, transformCluster } from "@/lib/types";
+import { clustersToGraphData } from "@/lib/cluster-to-graph";
 
 // Mock data - will be replaced with API calls
 const mockClusters = [
@@ -144,32 +145,21 @@ export default function Home() {
           </TabsContent>
 
           <TabsContent value="graph">
-            <div className="nvidia-build-card p-6 h-[800px]">
-              <h2 className="text-xl font-bold mb-4">3D Cluster Network Visualization</h2>
-              {Array.isArray(clusters) && clusters.length > 0 ? (
-                <div className="h-[calc(100%-3rem)]">
-                  <ClusterForceGraph
-                    clusters={clusters.map(c => ({
-                      id: c.id,
-                      label: c.label,
-                      size: c.size,
-                      group: c.priority,
-                    }))}
-                    onClusterClick={(clusterId) => {
-                      const cluster = clusters.find(c => c.id === clusterId);
-                      if (cluster) {
-                        setSelectedCluster(cluster);
-                        setActiveTab("details");
-                      }
-                    }}
-                  />
-                </div>
-              ) : (
+            {Array.isArray(clusters) && clusters.length > 0 ? (
+              <div className="h-[800px]">
+                <EnhancedGraphVisualization
+                  graphData={clustersToGraphData(clusters)}
+                  fullscreen={false}
+                  onError={(error) => console.error("Graph error:", error)}
+                />
+              </div>
+            ) : (
+              <div className="nvidia-build-card p-6">
                 <div className="text-center py-12 text-muted-foreground">
                   {loading ? "Loading clusters..." : "No clusters available"}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="search">
