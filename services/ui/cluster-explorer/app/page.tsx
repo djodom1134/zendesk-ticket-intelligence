@@ -69,15 +69,16 @@ export default function Home() {
     const fetchClusters = async () => {
       try {
         const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-        const response = await fetch(`${apiUrl}/clusters`);
+        const response = await fetch(`${apiUrl}/api/clusters`);
         if (response.ok) {
           const data = await response.json();
-          if (data.clusters && data.clusters.length > 0) {
-            setClusters(data.clusters);
+          // API returns array directly, not wrapped in {clusters: [...]}
+          if (Array.isArray(data) && data.length > 0) {
+            setClusters(data);
             setStats({
-              totalClusters: data.clusters.length,
-              totalTickets: data.clusters.reduce((sum: number, c: any) => sum + c.size, 0),
-              avgConfidence: Math.round(data.clusters.reduce((sum: number, c: any) => sum + (c.confidence || 0), 0) / data.clusters.length * 100),
+              totalClusters: data.length,
+              totalTickets: data.reduce((sum: number, c: any) => sum + c.size, 0),
+              avgConfidence: Math.round(data.reduce((sum: number, c: any) => sum + (c.confidence || 0), 0) / data.length * 100),
             });
           }
         }
