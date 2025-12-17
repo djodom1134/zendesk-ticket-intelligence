@@ -73,13 +73,9 @@ class TicketClusterer:
             except ImportError:
                 logger.warning("hdbscan not installed, using AgglomerativeClustering instead")
                 from sklearn.cluster import AgglomerativeClustering
-                # Estimate number of clusters based on data size
-                n_clusters = max(5, min(50, int(np.sqrt(1000))))  # Will be set dynamically
-                self._hdbscan = AgglomerativeClustering(
-                    n_clusters=None,
-                    distance_threshold=1.5,
-                    linkage="ward",
-                )
+                # Use distance_threshold for dynamic clustering
+                # This will be set based on data characteristics in cluster()
+                self._hdbscan = None  # Will be created dynamically
 
     def cluster(
         self,
@@ -100,9 +96,25 @@ class TicketClusterer:
         logger.info("Running UMAP reduction", dims=self.umap_n_components)
         reduced = self._umap.fit_transform(embeddings)
 
-        # HDBSCAN clustering
+        # HDBSCAN clustering (or fallback)
         logger.info("Running HDBSCAN clustering")
-        labels = self._hdbscan.fit_predict(reduced)
+
+        # If using AgglomerativeClustering fallback, create it dynamically
+        if self._hdbscan is None:
+            from sklearn.cluster import AgglomerativeClustering
+            # Dynamic threshold based on data size
+            # Smaller threshold = more clusters, larger = fewer clusters
+            # Scale with sqrt of data size for reasonable cluster counts
+            distance_threshold = 2.0 + (np.sqrt(n_tickets) / 50)
+            logger.info("Using AgglomerativeClustering", distance_threshold=distance_threshold)
+            clusterer = AgglomerativeClustering(
+                n_clusters=None,
+                distance_threshold=distance_threshold,
+                linkage="ward",
+            )
+            labels = clusterer.fit_predict(reduced)
+        else:
+            labels = self._hdbscan.fit_predict(reduced)
 
         unique_labels = set(labels)
         unique_labels.discard(-1)  # Remove noise
