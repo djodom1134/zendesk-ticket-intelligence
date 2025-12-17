@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { ForceGraphWrapper } from "./force-graph-wrapper"
 import { FallbackGraph } from "./fallback-graph"
 import { Button } from "@/components/ui/button"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { CuboidIcon as Cube, LayoutGrid, Loader2 } from "lucide-react"
 import type { TicketPosition } from "@/lib/types"
 
@@ -15,14 +16,17 @@ interface TicketScatterPlotProps {
   zDim?: number
 }
 
-export function TicketScatterPlot({ 
+export function TicketScatterPlot({
   apiUrl,
   initialMode = '2d',
-  xDim = 0,
-  yDim = 1,
-  zDim = 2
+  xDim: initialXDim = 0,
+  yDim: initialYDim = 1,
+  zDim: initialZDim = 2
 }: TicketScatterPlotProps) {
   const [use3D, setUse3D] = useState(initialMode === '3d')
+  const [xDim, setXDim] = useState(initialXDim)
+  const [yDim, setYDim] = useState(initialYDim)
+  const [zDim, setZDim] = useState(initialZDim)
   const [tickets, setTickets] = useState<TicketPosition[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -32,7 +36,7 @@ export function TicketScatterPlot({
       try {
         setLoading(true)
         setError(null)
-        
+
         const params = new URLSearchParams({
           x_dim: xDim.toString(),
           y_dim: yDim.toString(),
@@ -40,10 +44,10 @@ export function TicketScatterPlot({
           use_3d: use3D.toString(),
           limit: '2000'
         })
-        
+
         const response = await fetch(`${apiUrl}/api/tickets/positions?${params}`)
         if (!response.ok) throw new Error('Failed to fetch ticket positions')
-        
+
         const data: TicketPosition[] = await response.json()
         setTickets(data)
       } catch (err) {
@@ -78,47 +82,94 @@ export function TicketScatterPlot({
 
   return (
     <div className="relative w-full h-full">
-      {/* 2D/3D Toggle */}
-      <div className="absolute top-4 right-4 z-10 flex gap-2">
-        <div className="bg-background/80 backdrop-blur-sm px-3 py-1 rounded-md text-sm">
-          {tickets.length} tickets
+      {/* Controls */}
+      <div className="absolute top-4 left-4 right-4 z-10 flex items-center justify-between gap-4">
+        {/* Left side: Dimension selectors */}
+        <div className="flex items-center gap-2 bg-background/80 backdrop-blur-sm px-3 py-2 rounded-md">
+          <span className="text-sm font-medium">Dimensions:</span>
+
+          {/* X Dimension */}
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground">X:</span>
+            <Select value={xDim.toString()} onValueChange={(v) => setXDim(parseInt(v))}>
+              <SelectTrigger className="h-7 w-16 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(i => (
+                  <SelectItem key={i} value={i.toString()}>C{i}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Y Dimension */}
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground">Y:</span>
+            <Select value={yDim.toString()} onValueChange={(v) => setYDim(parseInt(v))}>
+              <SelectTrigger className="h-7 w-16 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(i => (
+                  <SelectItem key={i} value={i.toString()}>C{i}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Z Dimension (only in 3D mode) */}
+          {use3D && (
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-muted-foreground">Z:</span>
+              <Select value={zDim.toString()} onValueChange={(v) => setZDim(parseInt(v))}>
+                <SelectTrigger className="h-7 w-16 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(i => (
+                    <SelectItem key={i} value={i.toString()}>C{i}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
-        <Button
-          size="sm"
-          variant={use3D ? "outline" : "default"}
-          onClick={() => setUse3D(false)}
-        >
-          <LayoutGrid className="h-4 w-4 mr-2" />
-          2D
-        </Button>
-        <Button
-          size="sm"
-          variant={use3D ? "default" : "outline"}
-          onClick={() => setUse3D(true)}
-        >
-          <Cube className="h-4 w-4 mr-2" />
-          3D
-        </Button>
+
+        {/* Right side: 2D/3D toggle and ticket count */}
+        <div className="flex items-center gap-2">
+          <div className="bg-background/80 backdrop-blur-sm px-3 py-1 rounded-md text-sm">
+            {tickets.length} tickets
+          </div>
+          <Button
+            size="sm"
+            variant={use3D ? "outline" : "default"}
+            onClick={() => setUse3D(false)}
+          >
+            <LayoutGrid className="h-4 w-4 mr-2" />
+            2D
+          </Button>
+          <Button
+            size="sm"
+            variant={use3D ? "default" : "outline"}
+            onClick={() => setUse3D(true)}
+          >
+            <Cube className="h-4 w-4 mr-2" />
+            3D
+          </Button>
+        </div>
       </div>
 
       {/* Graph Display */}
-      {use3D ? (
-        <ForceGraphWrapper
-          jsonData={graphData}
-          fullscreen={false}
-          layoutType="force"
-          highlightedNodes={[]}
-          enableClustering={false}
-          enableClusterColors={true}
-        />
-      ) : (
-        <div className="w-full h-full">
-          {/* TODO: Create 2D scatter plot component */}
-          <div className="flex items-center justify-center h-full">
-            2D scatter plot coming soon - use 3D view for now
-          </div>
-        </div>
-      )}
+      <ForceGraphWrapper
+        jsonData={graphData}
+        fullscreen={false}
+        layoutType="force"
+        highlightedNodes={[]}
+        enableClustering={false}
+        enableClusterColors={true}
+        initialMode={use3D ? '3d' : '2d'}
+      />
     </div>
   )
 }

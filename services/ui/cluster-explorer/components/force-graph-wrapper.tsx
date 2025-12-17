@@ -70,6 +70,7 @@ interface ForceGraphWrapperProps {
   remoteServiceUrl?: string // URL for remote WebGPU service
   onClusteringUpdate?: (metrics: PerformanceMetrics) => void
   onError?: (error: Error) => void
+  initialMode?: '2d' | '3d' // Initial view mode
 
   // Semantic clustering parameters
   clusteringMethod?: string // "spatial", "semantic", "hybrid"
@@ -336,6 +337,7 @@ export function ForceGraphWrapper({
   remoteServiceUrl = 'http://localhost:8083',
   onClusteringUpdate,
   onError,
+  initialMode = '3d',
   // Semantic clustering parameters
   clusteringMethod = "hybrid",
   semanticAlgorithm = "hierarchical",
