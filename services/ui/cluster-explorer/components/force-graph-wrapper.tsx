@@ -860,8 +860,17 @@ export function ForceGraphWrapper({
           throw new Error("Failed to load ForceGraph3D library - it's undefined after import");
         }
 
+        // Store container reference to prevent it from being null during initialization
+        const container = containerRef.current;
+        if (!container) {
+          console.error("Container became null before graph initialization");
+          setError("Graph container lost");
+          setIsLoading(false);
+          return;
+        }
+
         try {
-          // Create the graph instance using the same pattern as before
+          // Create the graph instance using the stored container reference
           // @ts-ignore - Calling function directly, letting JS handle it
           const Graph = ForceGraph3D({
             rendererConfig: {
@@ -871,7 +880,7 @@ export function ForceGraphWrapper({
               precision: 'highp', // High precision for better quality
               depth: true // Enable depth testing for better 3D rendering
             }
-          })(containerRef.current);
+          })(container);
 
           if (!Graph) {
             throw new Error("Failed to create graph instance");
