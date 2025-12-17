@@ -4,8 +4,9 @@ import { useState, useEffect } from "react";
 import { ClustersTable } from "@/components/clusters-table";
 import { ClusterDetails } from "@/components/cluster-details";
 import { ClusterForceGraph } from "@/components/cluster-force-graph";
+import { ClusterSearch } from "@/components/cluster-search";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { LayoutGrid, TrendingUp, FileText, Network } from "lucide-react";
+import { LayoutGrid, TrendingUp, FileText, Network, Search } from "lucide-react";
 import { Cluster, ClusterAPIResponse, transformCluster } from "@/lib/types";
 
 // Mock data - will be replaced with API calls
@@ -116,7 +117,13 @@ export default function Home() {
               <div className="nvidia-build-tab-icon">
                 <Network className="h-3 w-3 text-[#76b900]" />
               </div>
-              <span>Cluster Graph</span>
+              <span>3D Graph</span>
+            </TabsTrigger>
+            <TabsTrigger value="search" className="nvidia-build-tab">
+              <div className="nvidia-build-tab-icon">
+                <Search className="h-3 w-3 text-[#76b900]" />
+              </div>
+              <span>Search</span>
             </TabsTrigger>
             <TabsTrigger value="details" className="nvidia-build-tab" disabled={!selectedCluster}>
               <div className="nvidia-build-tab-icon">
@@ -162,6 +169,19 @@ export default function Home() {
                   {loading ? "Loading clusters..." : "No clusters available"}
                 </div>
               )}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="search">
+            <div className="nvidia-build-card p-6">
+              <h2 className="text-xl font-bold mb-4">Search Clusters</h2>
+              <ClusterSearch
+                clusters={clusters}
+                onSelectCluster={(cluster) => {
+                  setSelectedCluster(cluster);
+                  setActiveTab("details");
+                }}
+              />
             </div>
           </TabsContent>
 
