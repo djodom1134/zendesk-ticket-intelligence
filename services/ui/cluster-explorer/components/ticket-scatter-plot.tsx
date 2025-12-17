@@ -200,7 +200,7 @@ function convertTicketsToGraphData(tickets: TicketPosition[]) {
   const nodes = tickets.map(ticket => ({
     id: ticket.ticket_id,
     name: ticket.subject || ticket.ticket_id,
-    val: 2, // Small dots
+    val: 0.5, // Very small dots for scatter plot
     color: ticket.cluster_id ? clusterColors.get(ticket.cluster_id) : '#666666',
     x: ticket.x,
     y: ticket.y,
