@@ -46,36 +46,24 @@ class TicketClusterer:
         self._hdbscan = None
 
     def _init_models(self):
-        """Lazy initialization of UMAP and clustering"""
+        """Lazy initialization of UMAP and HDBSCAN"""
         if self._umap is None:
-            try:
-                import umap
-                self._umap = umap.UMAP(
-                    n_components=self.umap_n_components,
-                    n_neighbors=self.umap_n_neighbors,
-                    metric=self.metric,
-                    random_state=42,
-                )
-            except ImportError:
-                logger.warning("umap-learn not installed, using PCA instead")
-                from sklearn.decomposition import PCA
-                self._umap = PCA(n_components=self.umap_n_components, random_state=42)
+            import umap
+            self._umap = umap.UMAP(
+                n_components=self.umap_n_components,
+                n_neighbors=self.umap_n_neighbors,
+                metric=self.metric,
+                random_state=42,
+            )
 
         if self._hdbscan is None:
-            try:
-                import hdbscan
-                self._hdbscan = hdbscan.HDBSCAN(
-                    min_cluster_size=self.min_cluster_size,
-                    min_samples=self.min_samples,
-                    metric="euclidean",
-                    cluster_selection_method="eom",
-                )
-            except ImportError:
-                logger.warning("hdbscan not installed, using AgglomerativeClustering instead")
-                from sklearn.cluster import AgglomerativeClustering
-                # Use distance_threshold for dynamic clustering
-                # This will be set based on data characteristics in cluster()
-                self._hdbscan = None  # Will be created dynamically
+            import hdbscan
+            self._hdbscan = hdbscan.HDBSCAN(
+                min_cluster_size=self.min_cluster_size,
+                min_samples=self.min_samples,
+                metric="euclidean",
+                cluster_selection_method="eom",
+            )
 
     def cluster(
         self,
@@ -96,25 +84,9 @@ class TicketClusterer:
         logger.info("Running UMAP reduction", dims=self.umap_n_components)
         reduced = self._umap.fit_transform(embeddings)
 
-        # HDBSCAN clustering (or fallback)
+        # HDBSCAN clustering
         logger.info("Running HDBSCAN clustering")
-
-        # If using AgglomerativeClustering fallback, create it dynamically
-        if self._hdbscan is None:
-            from sklearn.cluster import AgglomerativeClustering
-            # Dynamic threshold based on data size
-            # Smaller threshold = more clusters, larger = fewer clusters
-            # Scale with sqrt of data size for reasonable cluster counts
-            distance_threshold = 2.0 + (np.sqrt(n_tickets) / 50)
-            logger.info("Using AgglomerativeClustering", distance_threshold=distance_threshold)
-            clusterer = AgglomerativeClustering(
-                n_clusters=None,
-                distance_threshold=distance_threshold,
-                linkage="ward",
-            )
-            labels = clusterer.fit_predict(reduced)
-        else:
-            labels = self._hdbscan.fit_predict(reduced)
+        labels = self._hdbscan.fit_predict(reduced)
 
         unique_labels = set(labels)
         unique_labels.discard(-1)  # Remove noise
