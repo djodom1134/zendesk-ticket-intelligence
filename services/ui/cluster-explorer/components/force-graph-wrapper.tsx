@@ -811,8 +811,6 @@ export function ForceGraphWrapper({
 
   // Initialize the graph
   useEffect(() => {
-    if (!containerRef.current) return;
-
     console.log("Starting graph initialization...");
 
     // Flag to track if component is mounted
@@ -826,6 +824,22 @@ export function ForceGraphWrapper({
         if (typeof window === 'undefined') {
           console.error("Cannot initialize 3D graph in non-browser environment");
           setError("Browser environment required for 3D visualization");
+          setIsLoading(false);
+          return;
+        }
+
+        // Wait for container to be ready (with retry)
+        let retries = 0;
+        const maxRetries = 10;
+        while (!containerRef.current && retries < maxRetries) {
+          console.log(`Waiting for container ref... (attempt ${retries + 1}/${maxRetries})`);
+          await new Promise(resolve => setTimeout(resolve, 100));
+          retries++;
+        }
+
+        if (!containerRef.current) {
+          console.error("Container ref is null after retries, cannot initialize graph");
+          setError("Graph container not ready");
           setIsLoading(false);
           return;
         }
@@ -844,14 +858,6 @@ export function ForceGraphWrapper({
 
         if (!ForceGraph3D) {
           throw new Error("Failed to load ForceGraph3D library - it's undefined after import");
-        }
-
-        // Check if container is available
-        if (!containerRef.current) {
-          console.error("Container ref is null, cannot initialize graph");
-          setError("Graph container not ready");
-          setIsLoading(false);
-          return;
         }
 
         try {
