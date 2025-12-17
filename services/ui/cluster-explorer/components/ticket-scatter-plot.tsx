@@ -6,7 +6,7 @@ import { FallbackGraph } from "./fallback-graph"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Slider } from "@/components/ui/slider"
-import { Loader2, Link as LinkIcon } from "lucide-react"
+import { Loader2, Link as LinkIcon, Box, Square } from "lucide-react"
 import type { TicketPosition } from "@/lib/types"
 
 interface TicketScatterPlotProps {
@@ -29,6 +29,7 @@ export function TicketScatterPlot({
   const [zDim, setZDim] = useState(initialZDim)
   const [showLinks, setShowLinks] = useState(false)
   const [nodeSize, setNodeSize] = useState(0.005) // Default: 0.005
+  const [viewMode, setViewMode] = useState<'2d' | '3d'>('3d') // 2D or 3D view
   const [tickets, setTickets] = useState<TicketPosition[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -155,20 +156,45 @@ export function TicketScatterPlot({
           </div>
         </div>
 
-        {/* Bottom row: Node size slider */}
-        <div className="flex items-center gap-3 bg-background/80 backdrop-blur-sm px-3 py-2 rounded-md w-fit">
-          <span className="text-sm font-medium whitespace-nowrap">Node Size:</span>
-          <Slider
-            value={[nodeSize * 1000]} // Scale to 0-10 range for slider
-            onValueChange={(values) => setNodeSize(values[0] / 1000)}
-            min={0.1}
-            max={10}
-            step={0.1}
-            className="w-32"
-          />
-          <span className="text-xs text-muted-foreground w-12 text-right">
-            {(nodeSize * 1000).toFixed(1)}
-          </span>
+        {/* Bottom row: Node size slider and 2D/3D toggle */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 bg-background/80 backdrop-blur-sm px-3 py-2 rounded-md">
+            <span className="text-sm font-medium whitespace-nowrap">Node Size:</span>
+            <Slider
+              value={[nodeSize * 1000]} // Scale to 0-10 range for slider
+              onValueChange={(values) => setNodeSize(values[0] / 1000)}
+              min={0.1}
+              max={10}
+              step={0.1}
+              className="w-32"
+            />
+            <span className="text-xs text-muted-foreground w-12 text-right">
+              {(nodeSize * 1000).toFixed(1)}
+            </span>
+          </div>
+
+          {/* 2D/3D Toggle */}
+          <div className="flex items-center gap-2 bg-background/80 backdrop-blur-sm px-3 py-2 rounded-md">
+            <span className="text-sm font-medium whitespace-nowrap">View:</span>
+            <Button
+              size="sm"
+              variant={viewMode === '2d' ? "default" : "outline"}
+              onClick={() => setViewMode('2d')}
+              className="h-7"
+            >
+              <Square className="h-3 w-3 mr-1" />
+              2D
+            </Button>
+            <Button
+              size="sm"
+              variant={viewMode === '3d' ? "default" : "outline"}
+              onClick={() => setViewMode('3d')}
+              className="h-7"
+            >
+              <Box className="h-3 w-3 mr-1" />
+              3D
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -187,7 +213,7 @@ export function TicketScatterPlot({
           highlightedNodes={[]}
           enableClustering={false}
           enableClusterColors={true}
-          initialMode="3d"
+          viewMode={viewMode}
         />
       ) : (
         <div className="flex items-center justify-center h-full text-muted-foreground">

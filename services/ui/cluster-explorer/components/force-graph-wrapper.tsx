@@ -70,7 +70,7 @@ interface ForceGraphWrapperProps {
   remoteServiceUrl?: string // URL for remote WebGPU service
   onClusteringUpdate?: (metrics: PerformanceMetrics) => void
   onError?: (error: Error) => void
-  initialMode?: '2d' | '3d' // Initial view mode
+  viewMode?: '2d' | '3d' // Current view mode (can change dynamically)
 
   // Semantic clustering parameters
   clusteringMethod?: string // "spatial", "semantic", "hybrid"
@@ -337,7 +337,7 @@ export function ForceGraphWrapper({
   remoteServiceUrl = 'http://localhost:8083',
   onClusteringUpdate,
   onError,
-  initialMode = '3d',
+  viewMode = '3d',
   // Semantic clustering parameters
   clusteringMethod = "hybrid",
   semanticAlgorithm = "hierarchical",
@@ -995,6 +995,15 @@ export function ForceGraphWrapper({
       }
     };
   }, [jsonData]); // Add jsonData as dependency
+
+  // Update view mode (2D/3D) when viewMode prop changes
+  useEffect(() => {
+    if (graphRef.current && isInitialized) {
+      const numDimensions = viewMode === '2d' ? 2 : 3;
+      console.log(`Switching to ${viewMode.toUpperCase()} mode (${numDimensions} dimensions)`);
+      graphRef.current.numDimensions(numDimensions);
+    }
+  }, [viewMode, isInitialized]);
 
   // Effect for loading data after graph initialization
   useEffect(() => {
