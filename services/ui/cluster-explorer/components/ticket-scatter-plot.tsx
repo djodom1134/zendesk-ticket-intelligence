@@ -5,7 +5,7 @@ import { ForceGraphWrapper } from "./force-graph-wrapper"
 import { FallbackGraph } from "./fallback-graph"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { CuboidIcon as Cube, LayoutGrid, Loader2 } from "lucide-react"
+import { CuboidIcon as Cube, LayoutGrid, Loader2, Link as LinkIcon } from "lucide-react"
 import type { TicketPosition } from "@/lib/types"
 
 interface TicketScatterPlotProps {
@@ -27,6 +27,7 @@ export function TicketScatterPlot({
   const [xDim, setXDim] = useState(initialXDim)
   const [yDim, setYDim] = useState(initialYDim)
   const [zDim, setZDim] = useState(initialZDim)
+  const [showLinks, setShowLinks] = useState(false)
   const [tickets, setTickets] = useState<TicketPosition[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -61,7 +62,7 @@ export function TicketScatterPlot({
   }, [apiUrl, xDim, yDim, zDim, use3D])
 
   // Convert tickets to graph data format
-  const graphData = convertTicketsToGraphData(tickets)
+  const graphData = convertTicketsToGraphData(tickets, showLinks)
 
   if (loading) {
     return (
@@ -136,11 +137,20 @@ export function TicketScatterPlot({
           )}
         </div>
 
-        {/* Right side: 2D/3D toggle and ticket count */}
+        {/* Right side: Links toggle, 2D/3D toggle and ticket count */}
         <div className="flex items-center gap-2">
           <div className="bg-background/80 backdrop-blur-sm px-3 py-1 rounded-md text-sm">
             {tickets.length} tickets
           </div>
+          <Button
+            size="sm"
+            variant={showLinks ? "default" : "outline"}
+            onClick={() => setShowLinks(!showLinks)}
+            title="Toggle cluster connections"
+          >
+            <LinkIcon className="h-4 w-4 mr-2" />
+            Links
+          </Button>
           <Button
             size="sm"
             variant={use3D ? "outline" : "default"}
@@ -174,7 +184,7 @@ export function TicketScatterPlot({
   )
 }
 
-function convertTicketsToGraphData(tickets: TicketPosition[]) {
+function convertTicketsToGraphData(tickets: TicketPosition[], showLinks: boolean = false) {
   // Create a color map for clusters
   const clusterColors = new Map<string, string>()
 
@@ -236,7 +246,7 @@ function convertTicketsToGraphData(tickets: TicketPosition[]) {
   const nodes = tickets.map(ticket => ({
     id: ticket.ticket_id,
     name: ticket.subject || ticket.ticket_id,
-    val: 0.05, // Tiny dots for scatter plot (1,408 tickets)
+    val: 0.005, // Extremely tiny dots (90% reduction from 0.05)
     color: ticket.cluster_id ? clusterColors.get(ticket.cluster_id) : '#666666', // Color by cluster assignment
     x: ticket.x,
     y: ticket.y,
@@ -244,12 +254,49 @@ function convertTicketsToGraphData(tickets: TicketPosition[]) {
     fx: ticket.x, // Fix position
     fy: ticket.y,
     fz: ticket.z,
-    cluster: ticket.cluster_label || 'Unclustered'
+    cluster: ticket.cluster_label || 'Unclustered',
+    cluster_id: ticket.cluster_id
   }))
+
+  // Create links between tickets in the same cluster (if enabled)
+  let links: any[] = []
+
+  if (showLinks) {
+    const maxLinksPerNode = 3 // Limit links to avoid clutter
+
+    // Group tickets by cluster
+    const clusterGroups = new Map<string, typeof nodes>()
+    nodes.forEach(node => {
+      if (node.cluster_id) {
+        if (!clusterGroups.has(node.cluster_id)) {
+          clusterGroups.set(node.cluster_id, [])
+        }
+        clusterGroups.get(node.cluster_id)!.push(node)
+      }
+    })
+
+    // For each cluster, create links between nearby tickets
+    clusterGroups.forEach((clusterNodes, clusterId) => {
+      clusterNodes.forEach((node, idx) => {
+        // Connect to next few nodes in the same cluster (circular)
+        for (let i = 1; i <= maxLinksPerNode && i < clusterNodes.length; i++) {
+          const targetIdx = (idx + i) % clusterNodes.length
+          const target = clusterNodes[targetIdx]
+
+          links.push({
+            source: node.id,
+            target: target.id,
+            color: clusterColors.get(clusterId) || '#666666',
+            name: `Same cluster: ${node.cluster}`
+          })
+        }
+      })
+    })
+  }
 
   return {
     nodes,
-    links: [] // No links for scatter plot
+    links
   }
 }
 
