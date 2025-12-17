@@ -230,6 +230,17 @@ class ClusterSummary(BaseModel):
     y: Optional[float] = None  # 2D UMAP y-coordinate
 
 
+class TicketPosition(BaseModel):
+    """Ticket with 2D position for visualization"""
+    ticket_id: str
+    cluster_id: Optional[str] = None
+    cluster_label: Optional[str] = None
+    subject: Optional[str] = None
+    x: float
+    y: float
+    z: Optional[float] = None  # For 3D visualization
+
+
 class ClusterDetail(BaseModel):
     id: str
     label: str
@@ -650,6 +661,144 @@ async def list_clusters(
 
         return clusters
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tickets/positions", response_model=List[TicketPosition])
+async def get_ticket_positions(
+    x_dim: int = Query(0, ge=0, le=9, description="UMAP component for x-axis"),
+    y_dim: int = Query(1, ge=0, le=9, description="UMAP component for y-axis"),
+    z_dim: int = Query(2, ge=0, le=9, description="UMAP component for z-axis (3D only)"),
+    use_3d: bool = Query(False, description="Include z-coordinate for 3D visualization"),
+    limit: int = Query(2000, ge=1, le=5000, description="Max tickets to return")
+):
+    """
+    Get all tickets with their 2D/3D UMAP positions for scatter plot visualization.
+
+    This endpoint returns individual tickets as points, colored by their cluster.
+    Perfect for visualizing cluster density, separation, and overlap.
+
+    Returns:
+        List of tickets with x,y (and optionally z) coordinates
+        Each ticket includes its cluster assignment for coloring
+    """
+    try:
+        import numpy as np
+        import umap
+
+        qdrant = get_qdrant()
+        db = get_db()
+
+        # Get all tickets from Qdrant with their embeddings
+        logger.info("Fetching all ticket embeddings from Qdrant")
+
+        # Use scroll to get all points
+        scroll_result = qdrant.scroll(
+            collection_name=QDRANT_COLLECTION,
+            limit=limit,
+            with_vectors=True,
+            with_payload=True
+        )
+
+        points = scroll_result[0]  # First element is the list of points
+
+        if not points or len(points) < 2:
+            return []
+
+        logger.info(f"Retrieved {len(points)} tickets from Qdrant")
+
+        # Extract vectors and metadata
+        vectors = []
+        ticket_metadata = []
+
+        for point in points:
+            if point.vector is not None:
+                vectors.append(point.vector)
+                ticket_metadata.append({
+                    'ticket_id': str(point.id),
+                    'subject': point.payload.get('subject', ''),
+                    'cluster_id': point.payload.get('cluster_id')
+                })
+
+        if len(vectors) < 2:
+            return []
+
+        # Apply UMAP to reduce to 3D or 2D
+        n_components = 3 if use_3d else 10  # Use 10 for 2D to allow dimension selection
+        vectors_array = np.array(vectors)
+
+        logger.info(f"Applying UMAP to {len(vectors)} tickets, reducing to {n_components} dimensions")
+
+        umap_model = umap.UMAP(
+            n_components=min(n_components, len(vectors) - 1),
+            n_neighbors=min(15, len(vectors) - 1),
+            min_dist=0.1,
+            metric='cosine',
+            random_state=42
+        )
+        positions_nd = umap_model.fit_transform(vectors_array)
+
+        # Get cluster labels for coloring
+        cluster_map = {}
+        try:
+            clusters = list(db.collection("clusters").all())
+            for c in clusters:
+                cluster_map[c["_key"]] = c.get("label", f"Cluster {c['_key']}")
+        except:
+            pass
+
+        # Build result
+        result = []
+
+        if use_3d:
+            # For 3D, use dimensions directly
+            positions_3d = positions_nd[:, [x_dim, y_dim, z_dim]]
+
+            # Normalize to 0-100
+            for i in range(3):
+                col = positions_3d[:, i]
+                col_min, col_max = col.min(), col.max()
+                col_range = col_max - col_min if col_max != col_min else 1.0
+                positions_3d[:, i] = (col - col_min) / col_range * 100
+
+            for i, meta in enumerate(ticket_metadata):
+                cluster_id = meta.get('cluster_id')
+                result.append(TicketPosition(
+                    ticket_id=meta['ticket_id'],
+                    cluster_id=cluster_id,
+                    cluster_label=cluster_map.get(cluster_id, 'Unclustered'),
+                    subject=meta.get('subject', ''),
+                    x=float(positions_3d[i][0]),
+                    y=float(positions_3d[i][1]),
+                    z=float(positions_3d[i][2])
+                ))
+        else:
+            # For 2D, select dimensions
+            positions_2d = positions_nd[:, [x_dim, y_dim]]
+
+            # Normalize to 0-100
+            for i in range(2):
+                col = positions_2d[:, i]
+                col_min, col_max = col.min(), col.max()
+                col_range = col_max - col_min if col_max != col_min else 1.0
+                positions_2d[:, i] = (col - col_min) / col_range * 100
+
+            for i, meta in enumerate(ticket_metadata):
+                cluster_id = meta.get('cluster_id')
+                result.append(TicketPosition(
+                    ticket_id=meta['ticket_id'],
+                    cluster_id=cluster_id,
+                    cluster_label=cluster_map.get(cluster_id, 'Unclustered'),
+                    subject=meta.get('subject', ''),
+                    x=float(positions_2d[i][0]),
+                    y=float(positions_2d[i][1])
+                ))
+
+        logger.info(f"Returning {len(result)} ticket positions")
+        return result
+
+    except Exception as e:
+        logger.error(f"Failed to get ticket positions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

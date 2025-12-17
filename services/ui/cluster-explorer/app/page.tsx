@@ -3,12 +3,11 @@
 import { useState, useEffect } from "react";
 import { ClustersTable } from "@/components/clusters-table";
 import { ClusterDetails } from "@/components/cluster-details";
-import { ClusterGraphView } from "@/components/cluster-graph-view";
+import { TicketScatterPlot } from "@/components/ticket-scatter-plot";
 import { ClusterSearch } from "@/components/cluster-search";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LayoutGrid, TrendingUp, FileText, Network, Search } from "lucide-react";
 import { Cluster, ClusterAPIResponse, transformCluster } from "@/lib/types";
-import { clustersToTriples } from "@/lib/cluster-to-graph";
 
 // Mock data - will be replaced with API calls
 const mockClusters = [
@@ -145,23 +144,15 @@ export default function Home() {
           </TabsContent>
 
           <TabsContent value="graph">
-            {Array.isArray(clusters) && clusters.length > 0 ? (
-              <div className="h-[800px]">
-                <ClusterGraphView
-                  triples={clustersToTriples(clusters)}
-                  clusters={clusters}
-                  fullscreen={false}
-                  initialMode="2d"
-                  layoutType="force"
-                />
-              </div>
-            ) : (
-              <div className="nvidia-build-card p-6">
-                <div className="text-center py-12 text-muted-foreground">
-                  {loading ? "Loading clusters..." : "No clusters available"}
-                </div>
-              </div>
-            )}
+            <div className="h-[800px]">
+              <TicketScatterPlot
+                apiUrl={process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}
+                initialMode="3d"
+                xDim={0}
+                yDim={1}
+                zDim={2}
+              />
+            </div>
           </TabsContent>
 
           <TabsContent value="search">

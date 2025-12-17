@@ -39,6 +39,17 @@ export interface Cluster {
   y?: number;  // 2D UMAP y-coordinate
 }
 
+// Ticket position for scatter plot visualization
+export interface TicketPosition {
+  ticket_id: string;
+  cluster_id?: string;
+  cluster_label?: string;
+  subject?: string;
+  x: number;
+  y: number;
+  z?: number;
+}
+
 // Transform API response to UI format
 export function transformCluster(apiCluster: ClusterAPIResponse): Cluster {
   return {
