@@ -5,6 +5,7 @@ import { ForceGraphWrapper } from "./force-graph-wrapper"
 import { FallbackGraph } from "./fallback-graph"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Slider } from "@/components/ui/slider"
 import { CuboidIcon as Cube, LayoutGrid, Loader2, Link as LinkIcon } from "lucide-react"
 import type { TicketPosition } from "@/lib/types"
 
@@ -28,6 +29,7 @@ export function TicketScatterPlot({
   const [yDim, setYDim] = useState(initialYDim)
   const [zDim, setZDim] = useState(initialZDim)
   const [showLinks, setShowLinks] = useState(false)
+  const [nodeSize, setNodeSize] = useState(0.005) // Default: 0.005
   const [tickets, setTickets] = useState<TicketPosition[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -62,7 +64,7 @@ export function TicketScatterPlot({
   }, [apiUrl, xDim, yDim, zDim, use3D])
 
   // Convert tickets to graph data format
-  const graphData = convertTicketsToGraphData(tickets, showLinks)
+  const graphData = convertTicketsToGraphData(tickets, showLinks, nodeSize)
 
   if (loading) {
     return (
@@ -84,10 +86,12 @@ export function TicketScatterPlot({
   return (
     <div className="relative w-full h-full">
       {/* Controls */}
-      <div className="absolute top-4 left-4 right-4 z-10 flex items-center justify-between gap-4">
-        {/* Left side: Dimension selectors */}
-        <div className="flex items-center gap-2 bg-background/80 backdrop-blur-sm px-3 py-2 rounded-md">
-          <span className="text-sm font-medium">Dimensions:</span>
+      <div className="absolute top-4 left-4 right-4 z-10 flex flex-col gap-2">
+        {/* Top row: Dimension selectors and controls */}
+        <div className="flex items-center justify-between gap-4">
+          {/* Left side: Dimension selectors */}
+          <div className="flex items-center gap-2 bg-background/80 backdrop-blur-sm px-3 py-2 rounded-md">
+            <span className="text-sm font-medium">Dimensions:</span>
 
           {/* X Dimension */}
           <div className="flex items-center gap-1">
@@ -137,36 +141,53 @@ export function TicketScatterPlot({
           )}
         </div>
 
-        {/* Right side: Links toggle, 2D/3D toggle and ticket count */}
-        <div className="flex items-center gap-2">
-          <div className="bg-background/80 backdrop-blur-sm px-3 py-1 rounded-md text-sm">
-            {tickets.length} tickets
+          {/* Right side: Links toggle, 2D/3D toggle and ticket count */}
+          <div className="flex items-center gap-2">
+            <div className="bg-background/80 backdrop-blur-sm px-3 py-1 rounded-md text-sm">
+              {tickets.length} tickets
+            </div>
+            <Button
+              size="sm"
+              variant={showLinks ? "default" : "outline"}
+              onClick={() => setShowLinks(!showLinks)}
+              title="Toggle cluster connections"
+            >
+              <LinkIcon className="h-4 w-4 mr-2" />
+              Links
+            </Button>
+            <Button
+              size="sm"
+              variant={use3D ? "outline" : "default"}
+              onClick={() => setUse3D(false)}
+            >
+              <LayoutGrid className="h-4 w-4 mr-2" />
+              2D
+            </Button>
+            <Button
+              size="sm"
+              variant={use3D ? "default" : "outline"}
+              onClick={() => setUse3D(true)}
+            >
+              <Cube className="h-4 w-4 mr-2" />
+              3D
+            </Button>
           </div>
-          <Button
-            size="sm"
-            variant={showLinks ? "default" : "outline"}
-            onClick={() => setShowLinks(!showLinks)}
-            title="Toggle cluster connections"
-          >
-            <LinkIcon className="h-4 w-4 mr-2" />
-            Links
-          </Button>
-          <Button
-            size="sm"
-            variant={use3D ? "outline" : "default"}
-            onClick={() => setUse3D(false)}
-          >
-            <LayoutGrid className="h-4 w-4 mr-2" />
-            2D
-          </Button>
-          <Button
-            size="sm"
-            variant={use3D ? "default" : "outline"}
-            onClick={() => setUse3D(true)}
-          >
-            <Cube className="h-4 w-4 mr-2" />
-            3D
-          </Button>
+        </div>
+
+        {/* Bottom row: Node size slider */}
+        <div className="flex items-center gap-3 bg-background/80 backdrop-blur-sm px-3 py-2 rounded-md w-fit">
+          <span className="text-sm font-medium whitespace-nowrap">Node Size:</span>
+          <Slider
+            value={[nodeSize * 1000]} // Scale to 0-10 range for slider
+            onValueChange={(values) => setNodeSize(values[0] / 1000)}
+            min={0.1}
+            max={10}
+            step={0.1}
+            className="w-32"
+          />
+          <span className="text-xs text-muted-foreground w-12 text-right">
+            {(nodeSize * 1000).toFixed(1)}
+          </span>
         </div>
       </div>
 
@@ -184,7 +205,7 @@ export function TicketScatterPlot({
   )
 }
 
-function convertTicketsToGraphData(tickets: TicketPosition[], showLinks: boolean = false) {
+function convertTicketsToGraphData(tickets: TicketPosition[], showLinks: boolean = false, nodeSize: number = 0.005) {
   // Create a color map for clusters
   const clusterColors = new Map<string, string>()
 
@@ -246,7 +267,7 @@ function convertTicketsToGraphData(tickets: TicketPosition[], showLinks: boolean
   const nodes = tickets.map(ticket => ({
     id: ticket.ticket_id,
     name: ticket.subject || ticket.ticket_id,
-    val: 0.005, // Extremely tiny dots (90% reduction from 0.05)
+    val: nodeSize, // User-adjustable node size
     color: ticket.cluster_id ? clusterColors.get(ticket.cluster_id) : '#666666', // Color by cluster assignment
     x: ticket.x,
     y: ticket.y,

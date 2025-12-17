@@ -846,6 +846,14 @@ export function ForceGraphWrapper({
           throw new Error("Failed to load ForceGraph3D library - it's undefined after import");
         }
 
+        // Check if container is available
+        if (!containerRef.current) {
+          console.error("Container ref is null, cannot initialize graph");
+          setError("Graph container not ready");
+          setIsLoading(false);
+          return;
+        }
+
         try {
           // Create the graph instance using the same pattern as before
           // @ts-ignore - Calling function directly, letting JS handle it
