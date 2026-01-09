@@ -79,31 +79,60 @@ class TicketClusterer:
             logger.warning("Not enough tickets for clustering", n=n_tickets)
             return []
 
-        # Adjust UMAP parameters for small datasets
-        effective_n_neighbors = min(self.umap_n_neighbors, n_tickets - 1)
-        effective_n_components = min(self.umap_n_components, n_tickets - 1)
+        # For very small datasets, skip UMAP and cluster directly on embeddings
+        # UMAP requires n_samples > n_components and n_neighbors <= n_samples
+        MIN_FOR_UMAP = 15  # Minimum samples for reliable UMAP
         
-        if effective_n_neighbors != self.umap_n_neighbors:
+        if n_tickets < MIN_FOR_UMAP:
             logger.info(
-                "Adjusting UMAP for small dataset",
-                original_neighbors=self.umap_n_neighbors,
-                effective_neighbors=effective_n_neighbors,
-                effective_components=effective_n_components,
+                "Dataset too small for UMAP, using direct clustering",
+                n_tickets=n_tickets,
+                min_for_umap=MIN_FOR_UMAP,
             )
-            # Re-init UMAP with adjusted params
-            import umap
-            self._umap = umap.UMAP(
-                n_components=effective_n_components,
-                n_neighbors=effective_n_neighbors,
-                metric=self.metric,
-                random_state=42,
-            )
+            # Use PCA for simple dimensionality reduction on small datasets
+            from sklearn.decomposition import PCA
+            n_components = min(5, n_tickets - 1)
+            pca = PCA(n_components=n_components, random_state=42)
+            reduced = pca.fit_transform(embeddings)
+            logger.info("PCA reduction complete", dims=n_components)
         else:
-            self._init_models()
+            # Adjust UMAP parameters for medium datasets
+            effective_n_neighbors = min(self.umap_n_neighbors, n_tickets - 1)
+            effective_n_components = min(self.umap_n_components, n_tickets - 2)
+            
+            if effective_n_neighbors != self.umap_n_neighbors:
+                logger.info(
+                    "Adjusting UMAP for dataset size",
+                    original_neighbors=self.umap_n_neighbors,
+                    effective_neighbors=effective_n_neighbors,
+                    effective_components=effective_n_components,
+                )
+                import umap
+                self._umap = umap.UMAP(
+                    n_components=effective_n_components,
+                    n_neighbors=effective_n_neighbors,
+                    metric=self.metric,
+                    random_state=42,
+                )
+            else:
+                self._init_models()
 
-        # UMAP reduction
-        logger.info("Running UMAP reduction", dims=effective_n_components)
-        reduced = self._umap.fit_transform(embeddings)
+            # UMAP reduction
+            logger.info("Running UMAP reduction", dims=effective_n_components)
+            reduced = self._umap.fit_transform(embeddings)
+        
+        # Initialize HDBSCAN if not done
+        if self._hdbscan is None:
+            import hdbscan
+            # Adjust min_cluster_size for small datasets
+            effective_min_cluster = min(self.min_cluster_size, max(2, n_tickets // 3))
+            effective_min_samples = min(self.min_samples, effective_min_cluster)
+            self._hdbscan = hdbscan.HDBSCAN(
+                min_cluster_size=effective_min_cluster,
+                min_samples=effective_min_samples,
+                metric="euclidean",
+                cluster_selection_method="eom",
+            )
 
         # HDBSCAN clustering
         logger.info("Running HDBSCAN clustering")
