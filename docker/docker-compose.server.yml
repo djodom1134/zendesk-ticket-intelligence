@@ -1,0 +1,203 @@
+# ZTI Server Deployment - Coexists with nx_brain on nxbrain server
+# 
+# Ports used by nx_brain (avoid these):
+#   - 5432: PostgreSQL
+#   - 9000-9001: MinIO
+#   - 10005-10008: MCP servers (Zendesk, HubSpot, TestRail, NXConnect)
+#
+# ZTI uses:
+#   - 8529: ArangoDB
+#   - 6333-6334: Qdrant
+#   - 11434: Ollama (GPU)
+#   - 8000: ZTI API
+#   - 3000: ZTI UI
+#
+# Usage:
+#   cd ~/Code/zendesk_zen
+#   docker compose -f docker/docker-compose.server.yml up -d
+#   docker compose -f docker/docker-compose.server.yml logs -f
+
+services:
+  # ================== Infrastructure ==================
+
+  # ArangoDB - Graph database for tickets, clusters, and knowledge graph
+  arangodb:
+    image: arangodb:latest
+    container_name: zti-arangodb
+    environment:
+      - ARANGO_NO_AUTH=1  # Dev mode; add auth for production
+    ports:
+      - "8529:8529"
+    volumes:
+      - zti_arangodb_data:/var/lib/arangodb3
+      - zti_arangodb_apps:/var/lib/arangodb3-apps
+    healthcheck:
+      test: ["CMD", "arangosh", "--server.endpoint", "tcp://127.0.0.1:8529", "--server.authentication", "false", "--javascript.execute-string", "db._version()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - zti-network
+
+  # Initialize ArangoDB with ZTI database
+  arangodb-init:
+    image: arangodb:latest
+    container_name: zti-arangodb-init
+    depends_on:
+      arangodb:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      sh -c "
+        echo 'Creating ZTI database and collections...' &&
+        arangosh --server.endpoint tcp://arangodb:8529 --server.authentication false --javascript.execute-string '
+          try { db._createDatabase(\"zti\"); print(\"Database zti created\"); } catch(e) { if(e.message.includes(\"duplicate\")) { print(\"Database zti exists\"); } else { throw e; } }
+          db._useDatabase(\"zti\");
+          var collections = [\"raw_tickets\", \"tickets\", \"clusters\", \"nodes\", \"edges\", \"feedback\"];
+          collections.forEach(function(c) {
+            try { db._create(c); print(\"Collection \" + c + \" created\"); } catch(e) { if(e.message.includes(\"duplicate\")) { print(\"Collection \" + c + \" exists\"); } else { throw e; } }
+          });
+          print(\"ZTI database setup complete!\");
+        '
+      "
+    networks:
+      - zti-network
+
+  # Qdrant - Vector database for embeddings
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: zti-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - zti_qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - zti-network
+
+  # Initialize Qdrant collections (4096 dims for qwen3-embedding:8b)
+  qdrant-init:
+    image: curlimages/curl:latest
+    container_name: zti-qdrant-init
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        echo 'Creating ZTI Qdrant collections...'
+        sleep 3
+        # Ticket embeddings collection (4096 dims for qwen3-embedding:8b)
+        curl -s -X PUT http://qdrant:6333/collections/ticket_embeddings \
+          -H 'Content-Type: application/json' \
+          -d '{"vectors":{"size":4096,"distance":"Cosine"}}' || true
+        echo 'ticket_embeddings collection ready'
+        # Cluster embeddings collection
+        curl -s -X PUT http://qdrant:6333/collections/cluster_embeddings \
+          -H 'Content-Type: application/json' \
+          -d '{"vectors":{"size":4096,"distance":"Cosine"}}' || true
+        echo 'cluster_embeddings collection ready'
+        echo 'Qdrant setup complete!'
+    networks:
+      - zti-network
+
+  # NOTE: Ollama runs NATIVELY on the host (not in Docker) with GPU access
+  # The native ollama service is already running on port 11434 with:
+  #   - nemotron:70b, deepseek-r1:70b (LLM)
+  #   - qwen3-embedding:0.6b, nomic-embed-text (embeddings)
+  # 
+  # Containers access it via host.docker.internal:11434
+  # No Docker Ollama container needed - native has full GPU access
+
+  # ================== Application Services ==================
+
+  # Pipeline - Python container for ingest, normalize, embed, cluster
+  pipeline:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.pipeline
+    container_name: zti-pipeline
+    environment:
+      # Use nx_brain's Zendesk MCP server (already running on this host)
+      - ZENDESK_MCP_URL=http://host.docker.internal:10005/sse
+      - ARANGODB_HOST=arangodb
+      - ARANGODB_PORT=8529
+      - ARANGODB_DB=zti
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      # Use native Ollama with GPU (runs on host, not Docker)
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - ZTI_DATA_DIR=/data/zti
+    volumes:
+      - zti_pipeline_data:/data/zti
+      - ../services:/app/services:ro
+      - ../shared:/app/shared:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      arangodb:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - zti-network
+    command: ["tail", "-f", "/dev/null"]
+
+  # API - FastAPI backend
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    container_name: zti-api
+    ports:
+      - "8000:8000"
+    environment:
+      - ARANGODB_HOST=arangodb
+      - ARANGODB_PORT=8529
+      - ARANGODB_DB=zti
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - QDRANT_COLLECTION=ticket_embeddings
+      # Use native Ollama with GPU (runs on host, not Docker)
+      - OLLAMA_URL=http://host.docker.internal:11434
+      # Use original ZTI models
+      - EMBED_MODEL=qwen3-embedding:8b
+      - CHAT_MODEL=gpt-oss:120b
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      arangodb:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - zti-network
+
+volumes:
+  zti_arangodb_data:
+  zti_arangodb_apps:
+  zti_qdrant_data:
+  zti_pipeline_data:
+
+networks:
+  zti-network:
+    name: zti-network
+    driver: bridge

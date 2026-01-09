@@ -72,7 +72,6 @@ class TicketClusterer:
         ticket_texts: list[str] = None,
     ) -> list[ClusterResult]:
         """Cluster embeddings and return cluster results."""
-        self._init_models()
         n_tickets = len(embeddings)
         logger.info("Starting clustering", n_tickets=n_tickets)
 
@@ -80,8 +79,30 @@ class TicketClusterer:
             logger.warning("Not enough tickets for clustering", n=n_tickets)
             return []
 
+        # Adjust UMAP parameters for small datasets
+        effective_n_neighbors = min(self.umap_n_neighbors, n_tickets - 1)
+        effective_n_components = min(self.umap_n_components, n_tickets - 1)
+        
+        if effective_n_neighbors != self.umap_n_neighbors:
+            logger.info(
+                "Adjusting UMAP for small dataset",
+                original_neighbors=self.umap_n_neighbors,
+                effective_neighbors=effective_n_neighbors,
+                effective_components=effective_n_components,
+            )
+            # Re-init UMAP with adjusted params
+            import umap
+            self._umap = umap.UMAP(
+                n_components=effective_n_components,
+                n_neighbors=effective_n_neighbors,
+                metric=self.metric,
+                random_state=42,
+            )
+        else:
+            self._init_models()
+
         # UMAP reduction
-        logger.info("Running UMAP reduction", dims=self.umap_n_components)
+        logger.info("Running UMAP reduction", dims=effective_n_components)
         reduced = self._umap.fit_transform(embeddings)
 
         # HDBSCAN clustering
