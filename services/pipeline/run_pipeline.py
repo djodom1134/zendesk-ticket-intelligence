@@ -165,16 +165,38 @@ def main(input_file: str, output_dir: str, skip_normalize: bool, skip_summarize:
         log.info("Skipping clustering")
 
     # Step 5: Label
-    if not skip_label and clusters is not None:
+    if not skip_label and clusters is not None and len(clusters) > 0:
         log.info("Step 5: Labeling clusters...")
         labeler = ClusterLabeler()
 
-        labeled = labeler.label_clusters(clusters, tickets)
+        # Build ticket text mapping for labeler
+        ticket_texts = {str(t.get("id", t.get("ticket_id", i))): t.get("summary", t.get("subject", "")) 
+                        for i, t in enumerate(tickets)}
+        
+        # Convert cluster dicts back to objects for labeler
+        from services.embed_cluster.clusterer import ClusterResult
+        cluster_objs = [
+            ClusterResult(
+                cluster_id=c["cluster_id"],
+                label=c["label"],
+                keywords=c.get("keywords", []),
+                ticket_ids=c["ticket_ids"],
+                representative_ids=c["representative_ids"],
+                size=c["size"],
+                centroid=c.get("centroid"),
+            )
+            for c in clusters
+        ]
+        
+        labeled = labeler.summarize_clusters_batch(cluster_objs, ticket_texts)
 
         label_file = os.path.join(output_dir, "clusters_labeled.json")
         with open(label_file, "w") as f:
-            json.dump(labeled, f, indent=2)
+            from services.embed_cluster.labeler import summary_to_dict
+            json.dump([summary_to_dict(s) for s in labeled], f, indent=2)
         log.info("Labeling complete", output=label_file)
+    elif clusters is not None and len(clusters) == 0:
+        log.info("Skipping labeling - no clusters found (all tickets marked as noise)")
     else:
         log.info("Skipping labeling")
 
