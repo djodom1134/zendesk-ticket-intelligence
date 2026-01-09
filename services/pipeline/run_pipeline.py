@@ -141,12 +141,25 @@ def main(input_file: str, output_dir: str, skip_normalize: bool, skip_summarize:
         log.info("Step 4: Clustering tickets...")
         clusterer = TicketClusterer()
 
-        cluster_result = clusterer.cluster(embeddings, tickets)
-        clusters = cluster_result["clusters"]
+        cluster_results = clusterer.cluster(embeddings, tickets)
+        
+        # Convert ClusterResult objects to dicts for serialization
+        clusters = [
+            {
+                "cluster_id": c.cluster_id,
+                "label": c.label,
+                "keywords": c.keywords,
+                "ticket_ids": c.ticket_ids,
+                "representative_ids": c.representative_ids,
+                "size": c.size,
+                "centroid": c.centroid,
+            }
+            for c in cluster_results
+        ]
 
         cluster_file = os.path.join(output_dir, "clusters.json")
         with open(cluster_file, "w") as f:
-            json.dump(cluster_result, f, indent=2, default=str)
+            json.dump({"clusters": clusters, "total": len(clusters)}, f, indent=2, default=str)
         log.info("Clustering complete", output=cluster_file, num_clusters=len(clusters))
     else:
         log.info("Skipping clustering")
